@@ -35,7 +35,7 @@ pip install flash-attn --no-build-isolation
 pip install wandb
 ```
 
-### Retriever environment (optional)
+### Retriever environment
 If you would like to call a local retriever as the search engine, you can install the environment as follows. (We recommend using a seperate environment.)
 ```bash
 conda create -n retriever python=3.10
