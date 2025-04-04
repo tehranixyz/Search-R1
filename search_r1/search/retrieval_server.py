@@ -1,15 +1,5 @@
-import json
-import os
-import warnings
-from typing import List, Dict, Optional
-import argparse
+from typing import List, Optional
 
-import faiss
-import torch
-import numpy as np
-from transformers import AutoConfig, AutoTokenizer, AutoModel
-from tqdm import tqdm
-import datasets
 
 import uvicorn
 from fastapi import FastAPI
@@ -25,32 +15,10 @@ class Config:
     Replace this with your real arguments or load them dynamically.
     """
     def __init__(
-        self, 
-        retrieval_method: str = "bm25", 
+        self,
         retrieval_topk: int = 10,
-        index_path: str = "./index/bm25",
-        corpus_path: str = "./data/corpus.jsonl",
-        dataset_path: str = "./data",
-        data_split: str = "train",
-        faiss_gpu: bool = True,
-        retrieval_model_path: str = "./model",
-        retrieval_pooling_method: str = "mean",
-        retrieval_query_max_length: int = 256,
-        retrieval_use_fp16: bool = False,
-        retrieval_batch_size: int = 128
     ):
-        self.retrieval_method = retrieval_method
         self.retrieval_topk = retrieval_topk
-        self.index_path = index_path
-        self.corpus_path = corpus_path
-        self.dataset_path = dataset_path
-        self.data_split = data_split
-        self.faiss_gpu = faiss_gpu
-        self.retrieval_model_path = retrieval_model_path
-        self.retrieval_pooling_method = retrieval_pooling_method
-        self.retrieval_query_max_length = retrieval_query_max_length
-        self.retrieval_use_fp16 = retrieval_use_fp16
-        self.retrieval_batch_size = retrieval_batch_size
 
 
 class QueryRequest(BaseModel):
@@ -63,14 +31,7 @@ app = FastAPI()
 
 # 1) Build a config (could also parse from arguments).
 #    In real usage, you'd parse your CLI arguments or environment variables.
-config = Config(
-    retrieval_method = "e5",  # or "dense"
-    faiss_gpu=True,
-    retrieval_pooling_method="mean",
-    retrieval_query_max_length=256,
-    retrieval_use_fp16=True,
-    retrieval_batch_size=512,
-)
+config = Config()
 
 @app.post("/retrieve")
 def retrieve_endpoint(request: QueryRequest):

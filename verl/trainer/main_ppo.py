@@ -14,7 +14,9 @@
 """
 Note that we don't combine the main with ray_trainer as ray_trainer is used by other main.
 """
-
+import os
+os.environ["HF_HUB_OFFLINE"]='1'
+os.environ["WANDB_MODE"] = "offline"
 from verl import DataProto
 import torch
 from verl.utils.reward_score import qa_em

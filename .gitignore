@@ -17,7 +17,6 @@ tensorflow/my_graph/*
 .idea/
 # C extensions
 *.so
-data
 sft/output/*
 sft/data/*
 
@@ -121,3 +120,4 @@ log/
 
 **logs
 wiki_dataset
+Qwen2.5-0.5B-Instruct
