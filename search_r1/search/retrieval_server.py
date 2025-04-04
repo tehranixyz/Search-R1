@@ -68,6 +68,11 @@ def retrieve_endpoint(request: QueryRequest):
     return {"result": resp}
 
 
+import socket
 if __name__ == "__main__":
+    # Print the IP address of the machine
+    hostname = socket.gethostname()
+    ip_address = socket.gethostbyname(hostname)
+    print(f"Server is running on IP address: {ip_address}")
     # 3) Launch the server. By default, it listens on http://127.0.0.1:8000
     uvicorn.run(app, host="0.0.0.0", port=8000)
