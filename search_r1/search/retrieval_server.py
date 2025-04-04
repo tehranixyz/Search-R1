@@ -56,7 +56,7 @@ def retrieve_endpoint(request: QueryRequest):
         for _ in range(request.topk):
             document = {
                 "title": f"Random Title {random.randint(1, 100)}",
-                "text": f"Random text content {random.randint(1, 1000)}."
+                "contents": f"Random text content {random.randint(1, 1000)}."
             }
             score = random.uniform(0, 1) if request.return_scores else None
             if request.return_scores:
