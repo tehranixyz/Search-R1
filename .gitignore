@@ -122,3 +122,5 @@ log/
 wiki_dataset
 Qwen2.5-0.5B-Instruct
 Qwen2-0.5B-Instruct
+gemma-2-2b-it
+downloader.py
