@@ -17,8 +17,6 @@ This trainer supports model-agonistic model initialization with huggingface
 """
 
 import os
-os.environ["HF_HUB_OFFLINE"]='1'
-os.environ["WANDB_MODE"] = "offline"
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
