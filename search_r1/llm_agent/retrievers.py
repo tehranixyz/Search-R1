@@ -11,18 +11,20 @@ class Retrievers:
     to interact with different LLM models for code-related queries.
     """
     
-    def __init__(self, json_path: str):
+    def __init__(self, json_path: str, test_mode: bool = False):
         """
         Initialize the Retrievers class with configurations from a JSON file.
         
         Args:
             json_path (str): Path to the JSON configuration file containing retriever settings.
+            test_mode (bool, optional): If True, returns dummy responses without calling OpenAI API. Defaults to False.
             
         Raises:
             FileNotFoundError: If the specified JSON file does not exist.
             json.JSONDecodeError: If the JSON file is not properly formatted.
         """
         self.retrievers = {}
+        self.test_mode = test_mode
         
         # Check if the JSON file exists
         if not os.path.exists(json_path):
@@ -64,8 +66,14 @@ class Retrievers:
         """
         retriever = self.retrievers[retriever_name]
         query = retriever["prompt_template"].format(src_lang=src_lang, trg_lang=trg_lang, source_code=source_code, translated_code=translated_code)
+        
+        if self.test_mode:
+            # Return dummy response for testing purposes
+            return f"[TEST MODE] Dummy response from {retriever_name} for query: {query[:50]}..."
+        
         completion = retriever["client"].completions.create(model=retriever["model_name"], prompt=query)
-        return completion.choices[0].message.content
+        #print(f"Response from {retriever_name}:\n{completion}")
+        return completion.choices[0].text
 
 
 
@@ -88,7 +96,7 @@ if __name__ == "__main__":
     """
 
     # Initialize retrievers with config file
-    retrievers = Retrievers("retrievers_config.json")
+    retrievers = Retrievers("retrievers_config.json", test_mode=True)  # Enable test mode for this example
 
     # Test each retriever
     for retriever_name in retrievers.retrievers:
