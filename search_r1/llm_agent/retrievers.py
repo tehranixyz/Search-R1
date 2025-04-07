@@ -1,4 +1,5 @@
 import json
+import os
 from openai import OpenAI
 from typing import List, Dict, Any
 
@@ -16,10 +17,24 @@ class Retrievers:
         
         Args:
             json_path (str): Path to the JSON configuration file containing retriever settings.
+            
+        Raises:
+            FileNotFoundError: If the specified JSON file does not exist.
+            json.JSONDecodeError: If the JSON file is not properly formatted.
         """
         self.retrievers = {}
-        with open(json_path, 'r') as f:
-            retriever_configs = json.load(f)
+        
+        # Check if the JSON file exists
+        if not os.path.exists(json_path):
+            print(f"Error: Configuration file not found at: {os.path.abspath(json_path)}")
+            raise FileNotFoundError(f"Configuration file not found: {json_path}")
+            
+        try:
+            with open(json_path, 'r') as f:
+                retriever_configs = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"Error: Invalid JSON format in configuration file: {json_path}")
+            raise json.JSONDecodeError(f"Invalid JSON format in configuration file: {e}", e.doc, e.pos)
 
         # Initialize each retriever with its configuration
         for retriever_config in retriever_configs:
