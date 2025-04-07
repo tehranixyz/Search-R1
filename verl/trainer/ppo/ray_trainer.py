@@ -684,6 +684,7 @@ class RayPPOTrainer(object):
             no_think_rl=self.config.algorithm.no_think_rl,
             search_url = self.config.retriever.url,
             topk = self.config.retriever.topk,
+            retriever_config_path = self.config.retrievers.config_path,
         )
 
         generation_manager = LLMGenerationManager(
