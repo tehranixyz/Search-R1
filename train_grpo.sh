@@ -79,4 +79,6 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     max_turns=2 \
     retriever.url="http://172.16.4.32:8000/retrieve" \
     retriever.topk=3 \
+    retrievers.config_path="retrievers_config.json"
+
     2>&1 | tee $EXPERIMENT_NAME.log

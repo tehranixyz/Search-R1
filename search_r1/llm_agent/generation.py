@@ -9,6 +9,7 @@ from verl import DataProto
 from verl.utils.tracking import Tracking
 import shutil
 import requests
+from .retrievers import Retrievers
 
 @dataclass
 class GenerationConfig:
@@ -21,7 +22,7 @@ class GenerationConfig:
     no_think_rl: bool=False
     search_url: str = None
     topk: int = 3
-
+    retriever_config_path: str = None
 class LLMGenerationManager:
     def __init__(
         self,
@@ -34,6 +35,7 @@ class LLMGenerationManager:
         self.actor_rollout_wg = actor_rollout_wg
         self.config = config
         self.is_validation = is_validation
+        self.retrievers = Retrievers(config.retriever_config_path)
 
         self.tensor_fn = TensorHelper(TensorConfig(
             pad_token_id=tokenizer.pad_token_id,
