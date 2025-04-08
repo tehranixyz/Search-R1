@@ -35,7 +35,7 @@ class LLMGenerationManager:
         self.actor_rollout_wg = actor_rollout_wg
         self.config = config
         self.is_validation = is_validation
-        self.retrievers = Retrievers(config.retriever_config_path)
+        self.retrievers = Retrievers(config.retriever_config_path, test_mode=True)
 
         self.tensor_fn = TensorHelper(TensorConfig(
             pad_token_id=tokenizer.pad_token_id,

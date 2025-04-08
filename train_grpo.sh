@@ -1,5 +1,5 @@
 export CUDA_VISIBLE_DEVICES=0,1
-export DATA_DIR='data/nq_search'
+export DATA_DIR='data/codejudge'
 
 WAND_PROJECT='Search-R1'
 
@@ -34,9 +34,9 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     data.train_batch_size=512 \
     data.val_batch_size=256 \
     data.max_prompt_length=512 \
-    data.max_response_length=512 \
+    data.max_response_length=256 \
     data.max_start_length=256 \
-    data.max_obs_length=512 \
+    data.max_obs_length=100 \
     data.shuffle_train_dataloader=True \
     algorithm.adv_estimator=grpo \
     actor_rollout_ref.model.path=$BASE_MODEL \

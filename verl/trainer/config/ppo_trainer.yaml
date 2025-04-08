@@ -146,6 +146,10 @@ retriever:
   url: "http://127.0.0.1:8000/retrieve"
   topk: 3
 
+retrievers:
+  config_path: "retrievers_config.json"
+
+
 algorithm:
   gamma: 1.0
   lam: 1.0
