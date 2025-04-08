@@ -46,13 +46,11 @@ def check_format_compliance(solution_str):
     # Check for required tags in the correct order
     required_tags = [
         r'<think>.*?</think>',  # Reasoning
-        r'<potential_translation>.*?</potential_translation>',  # Initial translation
     ]
     
     # Optional judge tags that should be properly formatted if present
     judge_tags = [
         r'<judge>.*?</judge>',  # Judge call
-        r'<judge_response>.*?</judge_response>',  # Judge response
     ]
     
     # Check if all required tags are present
