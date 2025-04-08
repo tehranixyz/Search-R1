@@ -19,7 +19,7 @@ os.environ["HF_HUB_OFFLINE"]='1'
 os.environ["WANDB_MODE"] = "offline"
 from verl import DataProto
 import torch
-from verl.utils.reward_score import qa_em
+from verl.utils.reward_score import qa_em, codejudge_reward
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 import re
 import numpy as np
@@ -27,8 +27,10 @@ import numpy as np
 def _select_rm_score_fn(data_source):
     if data_source in ['nq', 'triviaqa', 'popqa', 'hotpotqa', '2wikimultihopqa', 'musique', 'bamboogle']:
         return qa_em.compute_score_em
+    elif data_source in ['codejudge']:
+        return codejudge_reward.compute_score
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f"Reward scoring function not implemented for data source: '{data_source}'. Supported sources are: nq, triviaqa, popqa, hotpotqa, 2wikimultihopqa, musique, bamboogle")
 
 
 class RewardManager():

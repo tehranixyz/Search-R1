@@ -233,7 +233,7 @@ class LLMGenerationManager:
         rollings = gen_batch
 
         # Extract prompt information from the initial input
-        prompt_info = self._extract_prompt_info(initial_input_ids)
+        prompt_info_list = self._extract_prompt_info(initial_input_ids)
 
         # Main generation loop
         for step in range(self.config.max_turns):
@@ -256,7 +256,7 @@ class LLMGenerationManager:
 
             # Execute in environment and process observations
             next_obs, dones, valid_action, is_search = self.execute_predictions(
-                responses_str, self.tokenizer.pad_token, active_mask, prompt_info=prompt_info
+                responses_str, self.tokenizer.pad_token, active_mask, prompt_info_list=prompt_info_list
             )
             
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
@@ -299,7 +299,7 @@ class LLMGenerationManager:
 
             # # Execute in environment and process observations
             _, dones, valid_action, is_search = self.execute_predictions(
-                responses_str, self.tokenizer.pad_token, active_mask, do_search=False, prompt_info=prompt_info
+                responses_str, self.tokenizer.pad_token, active_mask, do_search=False, prompt_info_list=prompt_info_list
             )
             
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
@@ -331,45 +331,51 @@ class LLMGenerationManager:
         print("ACTIVE_TRAJ_NUM:", active_num_list)
         
         return self._compose_final_output(original_left_side, original_right_side, meta_info)
-        
-    def _extract_prompt_info(self, initial_input_ids: torch.Tensor) -> Dict:
+
+    def _extract_prompt_info(self, initial_input_ids: torch.Tensor) -> List[Dict]:
         """
         Extract prompt information from the initial input.
         
         Args:
-            initial_input_ids: Initial input token IDs
+            initial_input_ids: Initial input token IDs (batch of samples)
             
         Returns:
-            Dictionary containing prompt information
+            List of dictionaries containing prompt information for each sample
         """
         # Decode the initial input
         initial_input_str = self.tokenizer.batch_decode(initial_input_ids, skip_special_tokens=True)
         
-        prompt_info = {
-            'source_code': '',
-            'source_language': '',
-            'target_language': ''
-        }
+        prompt_info_list = []
         
-        # Extract source code - look for code blocks with any language
-        source_code_pattern = r'```(?:.*?)\n(.*?)\n```'
-        source_code_match = re.search(source_code_pattern, initial_input_str[0], re.DOTALL)
-        if source_code_match:
-            prompt_info['source_code'] = source_code_match.group(1).strip()
+        # Process each sample in the batch
+        for sample_str in initial_input_str:
+            prompt_info = {
+                'source_code': '',
+                'source_language': '',
+                'target_language': ''
+            }
+            
+            # Extract source code - look for code blocks with any language
+            source_code_pattern = r'```(?:.*?)\n(.*?)\n```'
+            source_code_match = re.search(source_code_pattern, sample_str, re.DOTALL)
+            if source_code_match:
+                prompt_info['source_code'] = source_code_match.group(1).strip()
+            
+            # Extract source language
+            source_lang_pattern = r'Translate the following (.*?) code to'
+            source_lang_match = re.search(source_lang_pattern, sample_str)
+            if source_lang_match:
+                prompt_info['source_language'] = source_lang_match.group(1).strip()
+            
+            # Extract target language
+            target_lang_pattern = r'to (.*?), adhering to'
+            target_lang_match = re.search(target_lang_pattern, sample_str)
+            if target_lang_match:
+                prompt_info['target_language'] = target_lang_match.group(1).strip()
+            
+            prompt_info_list.append(prompt_info)
         
-        # Extract source language
-        source_lang_pattern = r'Translate the following (.*?) code to'
-        source_lang_match = re.search(source_lang_pattern, initial_input_str[0])
-        if source_lang_match:
-            prompt_info['source_language'] = source_lang_match.group(1).strip()
-        
-        # Extract target language
-        target_lang_pattern = r'to (.*?), adhering to'
-        target_lang_match = re.search(target_lang_pattern, initial_input_str[0])
-        if target_lang_match:
-            prompt_info['target_language'] = target_lang_match.group(1).strip()
-        
-        return prompt_info
+        return prompt_info_list
 
     def _compose_final_output(self, left_side: Dict,
                             right_side: Dict,
@@ -403,9 +409,9 @@ class LLMGenerationManager:
         
         return final_output
 
-    def execute_predictions(self, predictions: List[str], pad_token: str, active_mask=None, do_search=True, prompt_info: Dict = None) -> List[str]:
+    def execute_predictions(self, predictions: List[str], pad_token: str, active_mask=None, do_search=True, prompt_info_list: List[Dict] = None) -> List[str]:
         """
-        Execute predictions across multiple environments.
+        Execute predictions
         NOTE: the function is the actual `step` function in the environment
         NOTE penalty_for_invalid is not included in observation shown to the LLM
         
@@ -414,17 +420,17 @@ class LLMGenerationManager:
             pad_token: Token to use for padding
             active_mask: Mask indicating which predictions are active
             do_search: Whether to perform search operations
-            prompt_info: Dictionary containing information from the prompt
+            prompt_info: List of dictionaries containing information from the prompt for each sample
             
         Returns:
             Tuple of (next observations, done flags, valid action flags, is search flags)
         """
-        cur_actions, contents = self.postprocess_predictions(predictions, prompt_info)
+        cur_actions, contents = self.postprocess_predictions(predictions, prompt_info_list)
         next_obs, dones, valid_action, is_search = [], [], [], []
         
         # Handle judge queries if needed
         judge_queries = []
-        for action, content in zip(cur_actions, contents):
+        for i, (action, content) in enumerate(zip(cur_actions, contents)):
             if action == 'judge':
                 # Construct judge query with all necessary information
                 judge_query = {
@@ -433,8 +439,9 @@ class LLMGenerationManager:
                     'source_code': content.get('source_code', ''),
                     'source_language': content.get('source_language', ''),
                     'target_language': content.get('target_language', ''),
-                    'think_content': content.get('think_content', '')
                 }
+                print("%" * 50)
+                print("JUDGE_QUERY:", judge_query)
                 judge_queries.append(judge_query)
         
         # Process judge queries if needed
@@ -443,43 +450,39 @@ class LLMGenerationManager:
             # Call judge API or process judge queries
             judge_results = self.process_judge_queries(judge_queries)
             assert len(judge_results) == len(judge_queries)
-        else:
-            judge_results = [''] * len(judge_queries)
-
+        
         # Process each prediction
         judge_idx = 0
-        for i, (action, content, active) in enumerate(zip(cur_actions, contents, active_mask)):
-            if not active:
+        for i, (action, content) in enumerate(zip(cur_actions, contents)):
+            if active_mask is not None and not active_mask[i]:
                 next_obs.append('')
-                dones.append(1)
-                valid_action.append(0)
-                is_search.append(0)
-            else:
-                if action == 'judge':
-                    # Return judge response
-                    judge_result = judge_results[judge_idx]
-                    judge_idx += 1
-                    next_obs.append(f'\n\n<judge_response>{judge_result}</judge_response>\n\n')
-                    dones.append(0)
-                    valid_action.append(1)
-                    is_search.append(1)
-                elif action == 'translation':
-                    # Final translation provided
-                    next_obs.append('')
-                    dones.append(1)
-                    valid_action.append(1)
-                    is_search.append(0)
-                else:
-                    # Invalid action
-                    next_obs.append(f'\nMy previous action is invalid. \
-If I want to call a judge, I should put the judge name between <judge> and </judge>. \
-If I want to provide the final translation, I should put the code between <translation> and </translation>. Let me try again.\n')
-                    dones.append(0)
-                    valid_action.append(0)
-                    is_search.append(0)
+                dones.append(True)
+                valid_action.append(False)
+                is_search.append(False)
+                continue
             
-        return next_obs, dones, valid_action, is_search
+            if action == 'judge':
+                # Get judge result for this sample
+                judge_result = judge_results[judge_idx] if judge_idx < len(judge_results) else 'INVALID'
+                judge_idx += 1
+                
+                next_obs.append(judge_result)
+                dones.append(True)
+                valid_action.append(True)
+                is_search.append(True)
+            elif action == 'translation':
+                next_obs.append(content.get('translation', ''))
+                dones.append(True)
+                valid_action.append(True)
+                is_search.append(False)
+            else:
+                next_obs.append('')
+                dones.append(True)
+                valid_action.append(False)
+                is_search.append(False)
         
+        return next_obs, dones, valid_action, is_search
+
     def process_judge_queries(self, judge_queries: List[Dict]) -> List[str]:
         """
         Process judge queries and return judge responses.
@@ -497,37 +500,25 @@ If I want to provide the final translation, I should put the code between <trans
         for query in judge_queries:
             judge_name = query.get('judge_name', '')
             potential_translation = query.get('potential_translation', '')
-            source_code = query.get('source_code', '')
-            source_language = query.get('source_language', '')
-            target_language = query.get('target_language', '')
-            think_content = query.get('think_content', '')
-            
-            # Example response format
-            response = f"Judge {judge_name} evaluated the translation from {source_language} to {target_language}."
-            
-            # Add specific feedback based on judge type
-            if judge_name == 'Functional Equivalence':
-                response += " The translation maintains functional equivalence with the source code."
-            elif judge_name == 'Language Conventions and Idiomatic':
-                response += " The translation follows the conventions and idioms of the target language."
-            elif judge_name == 'Readability and Structure':
-                response += " The translation is readable and well-structured."
-            elif judge_name == 'Error Handling':
-                response += " The translation properly handles errors and edge cases."
-            elif judge_name == 'Dependency and API':
-                response += " The translation correctly uses the appropriate dependencies and APIs."
+            if judge_name in self.retrievers.retrievers.keys() and potential_translation != '':
+                source_code = query.get('source_code', '')
+                source_language = query.get('source_language', '')
+                target_language = query.get('target_language', '')
+                response = self.retrievers.inquire(judge_name, source_code, potential_translation, source_language, target_language)
+            else:
+                response = 'INVALID'
             
             judge_responses.append(response)
         
         return judge_responses
 
-    def postprocess_predictions(self, predictions: List[Any], prompt_info: Dict = None) -> Tuple[List[str], List[Dict]]:
+    def postprocess_predictions(self, predictions: List[Any], prompt_info_list: List[Dict] = None) -> Tuple[List[str], List[Dict]]:
         """
-        Process (text-based) predictions from llm into actions and content dictionaries.
+        Process (text-based) predictions into actions and content.
         
         Args:
             predictions: List of raw predictions
-            prompt_info: Dictionary containing information from the prompt, including:
+            prompt_info: List of dictionaries containing information from the prompt for each sample, including:
                 - source_code: The source code to translate
                 - source_language: The source programming language
                 - target_language: The target programming language
@@ -539,14 +530,16 @@ If I want to provide the final translation, I should put the code between <trans
         contents = []
         
         # Default prompt info if not provided
-        if prompt_info is None:
-            prompt_info = {
+        if prompt_info_list is None:
+            prompt_info_list = [{
                 'source_code': '',
                 'source_language': '',
                 'target_language': ''
-            }
+            } for _ in range(len(predictions))]
                 
-        for prediction in predictions:
+        for i, prediction in enumerate(predictions):
+            # Get the corresponding prompt info for this sample
+            sample_prompt_info = prompt_info_list[i]
             if isinstance(prediction, str): # for llm output
                 # Check for judge action
                 judge_pattern = r'<judge>(.*?)</judge>'
@@ -560,14 +553,6 @@ If I want to provide the final translation, I should put the code between <trans
                 potential_translation_pattern = r'<potential_translation>(.*?)</potential_translation>'
                 potential_translation_match = re.search(potential_translation_pattern, prediction, re.DOTALL)
                 
-                # Check for think content
-                think_pattern = r'<think>(.*?)</think>'
-                think_match = re.search(think_pattern, prediction, re.DOTALL)
-                
-                # Check for judge response
-                judge_response_pattern = r'<judge_response>(.*?)</judge_response>'
-                judge_response_match = re.search(judge_response_pattern, prediction, re.DOTALL)
-                
                 content_dict = {}
                 
                 if judge_match:
@@ -579,17 +564,9 @@ If I want to provide the final translation, I should put the code between <trans
                         content_dict['potential_translation'] = potential_translation_match.group(1).strip()
                     
                     # Add prompt information to the content dictionary
-                    content_dict['source_code'] = prompt_info.get('source_code', '')
-                    content_dict['source_language'] = prompt_info.get('source_language', '')
-                    content_dict['target_language'] = prompt_info.get('target_language', '')
-                    
-                    # Extract think content if available
-                    if think_match:
-                        content_dict['think_content'] = think_match.group(1).strip()
-                    
-                    # Extract judge response if available
-                    if judge_response_match:
-                        content_dict['judge_response'] = judge_response_match.group(1).strip()
+                    content_dict['source_code'] = sample_prompt_info.get('source_code', '')
+                    content_dict['source_language'] = sample_prompt_info.get('source_language', '')
+                    content_dict['target_language'] = sample_prompt_info.get('target_language', '')
                 
                 elif translation_match:
                     action = 'translation'
@@ -602,7 +579,7 @@ If I want to provide the final translation, I should put the code between <trans
             
             actions.append(action)
             contents.append(content_dict)
-            
+        
         return actions, contents
 
     def batch_search(self, queries: List[str] = None) -> str:
