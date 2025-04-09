@@ -305,22 +305,22 @@ class LLMGenerationManager:
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
             active_mask = active_mask * curr_active_mask
             active_num_list.append(active_mask.sum().item())
-            turns_stats[curr_active_mask] += 1
+            #turns_stats[curr_active_mask] += 1
             valid_action_stats += torch.tensor(valid_action, dtype=torch.int)
             valid_search_stats += torch.tensor(is_search, dtype=torch.int)
 
-            next_obs_ids = self._process_next_obs(next_obs)
+            #next_obs_ids = self._process_next_obs(next_obs)
             
             # Update states
-            rollings = self._update_rolling_state(
-                rollings,
-                responses_ids,
-                next_obs_ids
-            )
+            # rollings = self._update_rolling_state(
+            #     rollings,
+            #     responses_ids,
+            #     next_obs_ids
+            # )
             original_right_side = self._update_right_side(
                 original_right_side,
                 responses_ids,
-                next_obs_ids
+                #next_obs_ids
             )
             
         meta_info['turns_stats'] = turns_stats.tolist()
@@ -434,14 +434,12 @@ class LLMGenerationManager:
             if action == 'judge':
                 # Construct judge query with all necessary information
                 judge_query = {
-                    'judge_name': content.get('judge_name', ''),
-                    'potential_translation': content.get('potential_translation', ''),
-                    'source_code': content.get('source_code', ''),
-                    'source_language': content.get('source_language', ''),
-                    'target_language': content.get('target_language', ''),
+                    'judge_name': content.get('judge_name', None),
+                    'potential_translation': content.get('potential_translation', None),
+                    'source_code': content.get('source_code', None),
+                    'source_language': content.get('source_language', None),
+                    'target_language': content.get('target_language', None),
                 }
-                print("%" * 50)
-                print("JUDGE_QUERY:", judge_query)
                 judge_queries.append(judge_query)
         
         # Process judge queries if needed
@@ -449,37 +447,49 @@ class LLMGenerationManager:
         if judge_queries and do_search:
             # Call judge API or process judge queries
             judge_results = self.process_judge_queries(judge_queries)
-            assert len(judge_results) == len(judge_queries)
+            assert len(judge_results) == sum([1 for action in cur_actions if action == 'judge']), \
+                f"Mismatch: {len(judge_results)} judge results but {sum([1 for action in cur_actions if action == 'judge'])} judge actions"
+        else:
+            judge_results = [''] * sum([1 for action in cur_actions if action == 'judge'])
         
         # Process each prediction
         judge_idx = 0
-        for i, (action, content) in enumerate(zip(cur_actions, contents)):
-            if active_mask is not None and not active_mask[i]:
+        for i, (action, active) in enumerate(zip(cur_actions, active_mask)):
+            if not active:
                 next_obs.append('')
-                dones.append(True)
-                valid_action.append(False)
-                is_search.append(False)
-                continue
-            
-            if action == 'judge':
-                # Get judge result for this sample
-                judge_result = judge_results[judge_idx] if judge_idx < len(judge_results) else 'INVALID'
-                judge_idx += 1
-                
-                next_obs.append(judge_result)
-                dones.append(True)
-                valid_action.append(True)
-                is_search.append(True)
-            elif action == 'translation':
-                next_obs.append(content.get('translation', ''))
-                dones.append(True)
-                valid_action.append(True)
-                is_search.append(False)
+                dones.append(1)
+                valid_action.append(0)
+                is_search.append(0)
             else:
-                next_obs.append('')
-                dones.append(True)
-                valid_action.append(False)
-                is_search.append(False)
+                if action == 'judge' and 'INVALID' not in judge_results[judge_idx]:
+                    # Get judge result for this sample
+                    judge_result = judge_results[judge_idx]
+                    judge_idx += 1
+                    
+                    next_obs.append(f'\n\n<judge_response>{judge_result.strip()}</judge_response>\n\n')
+                    dones.append(0)
+                    valid_action.append(1)
+                    is_search.append(1)
+                elif action == 'judge' and 'INVALID' in judge_results[judge_idx]:
+                    judge_result = judge_results[judge_idx]
+                    judge_idx += 1
+                    next_obs.append(f'\nMy previous action is invalid. {judge_result.replace("INVALID: ", "")}\n')
+                    dones.append(0)
+                    valid_action.append(0)
+                    is_search.append(0)
+                elif action == 'translation':
+                    next_obs.append('')
+                    dones.append(1)
+                    valid_action.append(1)
+                    is_search.append(0)
+                else:
+                    next_obs.append(f'\nMy previous action is invalid. \
+If I need a judge, I should only put the judge name between <judge> and </judge>. Valid judges are {list(self.retrievers.retrievers.keys())}. \
+If I want to give potential translation, I should put the potential translation between <potential_translation> and </potential_translation>. \
+If I want to give the final translation, I should put the final translation between <translation> and </translation>. Let me try again.\n')
+                    dones.append(0)
+                    valid_action.append(0)
+                    is_search.append(0)
         
         return next_obs, dones, valid_action, is_search
 
@@ -498,18 +508,31 @@ class LLMGenerationManager:
         
         judge_responses = []
         for query in judge_queries:
-            judge_name = query.get('judge_name', '')
-            potential_translation = query.get('potential_translation', '')
-            if judge_name in self.retrievers.retrievers.keys() and potential_translation != '':
-                source_code = query.get('source_code', '')
-                source_language = query.get('source_language', '')
-                target_language = query.get('target_language', '')
-                response = self.retrievers.inquire(judge_name, source_code, potential_translation, source_language, target_language)
+            response = 'INVALID'
+            judge_name = query.get('judge_name')
+            potential_translation = query.get('potential_translation')
+            if judge_name in self.retrievers.retrievers.keys() and potential_translation != None:
+                source_code = query.get('source_code')
+                source_language = query.get('source_language')
+                target_language = query.get('target_language')
+                if source_code and source_language and target_language:
+                    response = self.retrievers.inquire(judge_name, source_code,potential_translation, source_language, target_language)
+                else:
+                    missing = []
+                    if not source_code:
+                        missing.append('source code')
+                    if not source_language:
+                        missing.append('source language') 
+                    if not target_language:
+                        missing.append('target language')
+                    response = f"INVALID"
             else:
-                response = 'INVALID'
-            
+                if judge_name not in self.retrievers.retrievers.keys():
+                    response = f"INVALID: Judge '{judge_name}' is not valid. Valid judges are {list(self.retrievers.retrievers.keys())}"
+                elif potential_translation is None:
+                    response = "INVALID: I should first provide the potential translation between <potential_translation> and </potential_translation> before asking for a judge."
             judge_responses.append(response)
-        
+
         return judge_responses
 
     def postprocess_predictions(self, predictions: List[Any], prompt_info_list: List[Dict] = None) -> Tuple[List[str], List[Dict]]:
@@ -559,14 +582,16 @@ class LLMGenerationManager:
                     action = 'judge'
                     content_dict['judge_name'] = judge_match.group(1).strip()
                     
-                    # Extract potential translation if available
-                    if potential_translation_match:
-                        content_dict['potential_translation'] = potential_translation_match.group(1).strip()
-                    
                     # Add prompt information to the content dictionary
                     content_dict['source_code'] = sample_prompt_info.get('source_code', '')
                     content_dict['source_language'] = sample_prompt_info.get('source_language', '')
                     content_dict['target_language'] = sample_prompt_info.get('target_language', '')
+
+                    # Extract potential translation if available, otherwise None
+                    if potential_translation_match:
+                        content_dict['potential_translation'] = potential_translation_match.group(1).strip()
+                    else:
+                        content_dict['potential_translation'] = None
                 
                 elif translation_match:
                     action = 'translation'
