@@ -1,0 +1,36 @@
+knowledge_distillation:
+  enabled: true
+  weight: 0.5  # Weight for knowledge distillation rewards
+  teacher_model: "gpt-4"  # Teacher model to use for reviews
+  review_prompt_template: |
+    Please review the following code translation:
+    Input: {prompt}
+    Output: {response}
+
+    Provide a detailed review focusing on:
+    1. Correctness of translation
+    2. Code quality and style
+    3. Potential issues or improvements
+
+    Review: 
+
+actor_rollout_ref:
+  actor:
+    use_kl_loss: true  # Enable KL loss
+    kl_loss_coef: 0.1  # KL loss coefficient
+    kl_loss_type: "kl"  # Type of KL loss: "kl", "abs", "mse", "low_var_kl"
+    use_kd_loss: true  # Enable knowledge distillation loss
+    kd_loss_coef: 0.5  # Knowledge distillation loss coefficient
+    kd_loss_type: "cosine"  # Type of KD loss: "cosine", "mse", "kl"
+    teacher_model: "gpt-4"  # Teacher model to use for reviews
+    review_prompt_template: |
+      Please review the following code translation:
+      Input: {prompt}
+      Output: {response}
+
+      Provide a detailed review focusing on:
+      1. Correctness of translation
+      2. Code quality and style
+      3. Potential issues or improvements
+
+      Review: 

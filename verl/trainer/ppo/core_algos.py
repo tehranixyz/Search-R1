@@ -155,11 +155,6 @@ def compute_grpo_outcome_advantage(token_level_rewards: torch.Tensor,
     return scores, scores
 
 
-def compute_rewards(token_level_scores, old_log_prob, ref_log_prob, kl_ratio):
-    kl = old_log_prob - ref_log_prob
-    return token_level_scores - kl * kl_ratio
-
-
 def compute_policy_loss(old_log_prob, log_prob, advantages, eos_mask, cliprange):
     """Adapted from https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py#L1122
 

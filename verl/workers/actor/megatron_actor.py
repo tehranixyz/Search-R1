@@ -274,6 +274,34 @@ class MegatronPPOActor(BasePPOActor):
                                                                           cliprange=clip_ratio)
             entropy_loss = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask)
             policy_loss = pg_loss - entropy_loss * entropy_coeff
+
+            # Add KL loss if enabled
+            if self.config.use_kl_loss:
+                ref_log_prob = data['ref_log_prob']
+                kld = core_algos.kl_penalty(logprob=log_prob,
+                                            ref_logprob=ref_log_prob,
+                                            kl_penalty=self.config.kl_loss_type)
+                kl_loss = masked_mean(kld, response_mask)
+                policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
+
+            # Add knowledge distillation loss if enabled
+            if self.config.use_kd_loss:
+                teacher_reviews = data['teacher_reviews']
+                student_reviews = data['student_reviews']
+                
+                # Tokenize reviews
+                teacher_tokens = self.tokenizer(teacher_reviews, return_tensors="pt", padding=True, truncation=True)
+                student_tokens = self.tokenizer(student_reviews, return_tensors="pt", padding=True, truncation=True)
+                
+                # Get embeddings
+                teacher_emb = teacher_tokens['input_ids'].mean(dim=1)
+                student_emb = student_tokens['input_ids'].mean(dim=1)
+                
+                # Compute cosine similarity loss (1 - similarity)
+                kd_loss = 1 - F.cosine_similarity(teacher_emb, student_emb).mean()
+                
+                policy_loss = policy_loss + kd_loss * self.config.kd_loss_coef
+
             # return loss and stats
             stats = {
                 'actor/entropy_loss': entropy_loss.detach().item(),
@@ -281,6 +309,19 @@ class MegatronPPOActor(BasePPOActor):
                 'actor/pg_clipfrac': pg_clipfrac.detach().item(),
                 'actor/ppo_kl': ppo_kl.detach().item()
             }
+            
+            if self.config.use_kl_loss:
+                stats.update({
+                    'actor/kl_loss': kl_loss.detach().item(),
+                    'actor/kl_coef': self.config.kl_loss_coef
+                })
+                
+            if self.config.use_kd_loss:
+                stats.update({
+                    'actor/kd_loss': kd_loss.detach().item(),
+                    'actor/kd_coef': self.config.kd_loss_coef
+                })
+                
             return policy_loss, stats
 
         def forward_step(batch_iter, model):

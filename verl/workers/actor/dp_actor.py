@@ -213,10 +213,11 @@ class DataParallelPPOActor(BasePPOActor):
             select_keys.append('loss_mask')
         if self.config.use_kl_loss:
             select_keys.append('ref_log_prob')
+        if self.config.use_kd_loss:
+            select_keys.extend(['teacher_reviews', 'student_reviews'])
         batch = data.select(batch_keys=select_keys).batch
 
         # Split to make minibatch iterator for updating the actor
-        # See PPO paper for details. https://arxiv.org/abs/1707.06347
         dataloader = batch.split(self.config.ppo_mini_batch_size)
 
         metrics = {}
@@ -227,7 +228,6 @@ class DataParallelPPOActor(BasePPOActor):
                 max_token_len = self.config.ppo_max_token_len_per_gpu * self.ulysses_sequence_parallel_size
                 micro_batches, _ = rearrange_micro_batches(batch=mini_batch, max_token_len=max_token_len)
             else:
-                # split batch into micro_batches
                 micro_batches = mini_batch.split(self.config.ppo_micro_batch_size)
 
             self.actor_optimizer.zero_grad()
@@ -271,6 +271,26 @@ class DataParallelPPOActor(BasePPOActor):
                     policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
                     metrics['actor/kl_loss'] = kl_loss.detach().item()
                     metrics['actor/kl_coef'] = self.config.kl_loss_coef
+
+                if self.config.use_kd_loss:
+                    # Compute knowledge distillation loss
+                    teacher_reviews = data['teacher_reviews']
+                    student_reviews = data['student_reviews']
+                    
+                    # Tokenize reviews
+                    teacher_tokens = self.tokenizer(teacher_reviews, return_tensors="pt", padding=True, truncation=True)
+                    student_tokens = self.tokenizer(student_reviews, return_tensors="pt", padding=True, truncation=True)
+                    
+                    # Get embeddings
+                    teacher_emb = teacher_tokens['input_ids'].mean(dim=1)
+                    student_emb = student_tokens['input_ids'].mean(dim=1)
+                    
+                    # Compute cosine similarity loss (1 - similarity)
+                    kd_loss = 1 - F.cosine_similarity(teacher_emb, student_emb).mean()
+                    
+                    policy_loss = policy_loss + kd_loss * self.config.kd_loss_coef
+                    metrics['actor/kd_loss'] = kd_loss.detach().item()
+                    metrics['actor/kd_coef'] = self.config.kd_loss_coef
 
                 loss = policy_loss / self.gradient_accumulation
                 loss.backward()

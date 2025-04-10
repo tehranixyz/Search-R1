@@ -654,15 +654,20 @@ class RayPPOTrainer(object):
 
     def fit(self):
         """
-        The training loop of PPO.
-        The driver process only need to call the compute functions of the worker group through RPC to construct the PPO dataflow.
-        The light-weight advantage computation is done on the driver process.
+        The training loop of PPO with knowledge distillation.
         """
-
         logger = self.logger
         self.global_steps = 0
+        
+        # Initialize knowledge distillation components
+        from verl.trainer.ppo.knowledge_distillation import (
+            get_teacher_review, get_student_review
+        )
+        
+        # Load teacher model (GPT-4)
+        teacher_model = self.config.knowledge_distillation.teacher_model
+        
         # perform validation before training
-        # currently, we only support validation using the reward_function.
         if self.val_reward_fn is not None and self.config.trainer.get('val_before_train', True):
             val_metrics = self._validate()
             pprint(f'Initial validation metrics: {val_metrics}')
@@ -706,91 +711,67 @@ class RayPPOTrainer(object):
                 # pop those keys for generation
                 gen_batch = batch.pop(batch_keys=['input_ids', 'attention_mask', 'position_ids'])
 
-                ####################
-                # original code here
-
                 with _timer('step', timing_raw):
                     if not self.config.do_search:
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
-
                         batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
                                                                 dtype=object)
-                        # repeat to align with repeated responses in rollout
                         batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                         batch = batch.union(gen_batch_output)
-
-                ####################
-                # Below is aLL about agents - the "LLM + forloop"
-                ####################
-                # with _timer('step', timing_raw):
                     else:
                         first_input_ids = gen_batch.batch['input_ids'][:, -gen_config.max_start_length:].clone().long()
-
                         with _timer('gen', timing_raw):
                             generation_manager.timing_raw = timing_raw
                             final_gen_batch_output = generation_manager.run_llm_loop(
                                 gen_batch=gen_batch,
                                 initial_input_ids=first_input_ids,
                             )
-
-                        # final_gen_batch_output.batch.apply(lambda x: x.long(), inplace=True)
+                        
                         for key in final_gen_batch_output.batch.keys():
                             final_gen_batch_output.batch[key] = final_gen_batch_output.batch[key].long()
-
+                        
                         with torch.no_grad():
                             output = self.actor_rollout_wg.compute_log_prob(final_gen_batch_output)
                             final_gen_batch_output = final_gen_batch_output.union(output)
-
-                        # batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
-                        #                                         dtype=object)
+                        
                         batch.non_tensor_batch['uid'] = batch.non_tensor_batch['index'].copy()
-                                            
-                        # repeat to align with repeated responses in rollout
                         batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                         batch = batch.union(final_gen_batch_output)
 
-                    ####################
-                    ####################
-
-                    # balance the number of valid tokens on each dp rank.
-                    # Note that this breaks the order of data inside the batch.
-                    # Please take care when you implement group based adv computation such as GRPO and rloo
+                    # Get teacher and student reviews for knowledge distillation
+                    teacher_reviews = []
+                    student_reviews = []
+                    
+                    # Process each example in the batch
+                    for i in range(len(batch.batch['responses'])):
+                        prompt = self.tokenizer.decode(batch.batch['input_ids'][i])
+                        response = self.tokenizer.decode(batch.batch['responses'][i])
+                        
+                        # Get reviews
+                        teacher_review = get_teacher_review(prompt, response, teacher_model)
+                        student_review = get_student_review(prompt, response, self.actor_rollout_wg)
+                        
+                        teacher_reviews.append(teacher_review)
+                        student_reviews.append(student_review)
+                    
+                    # Add reviews to batch for knowledge distillation loss
+                    batch.batch['teacher_reviews'] = teacher_reviews
+                    batch.batch['student_reviews'] = student_reviews
+                    
+                    # balance the number of valid tokens on each dp rank
                     self._balance_batch(batch, metrics=metrics)
 
-                    # compute global_valid tokens
-                    batch.meta_info['global_token_num'] = torch.sum(batch.batch['attention_mask'], dim=-1).tolist()
-
-                    # batch.batch.apply(lambda x, key: x.long() if key != "old_log_probs" else x, inplace=True, key=True)
-                    for key in batch.batch.keys():
-                        if key != 'old_log_probs':
-                            batch.batch[key] = batch.batch[key].long()
-
-                    if self.use_reference_policy:
-                        # compute reference log_prob
-                        with _timer('ref', timing_raw):
-                            ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
-                            batch = batch.union(ref_log_prob)
-
-                    # compute values
-                    if self.use_critic:
-                        with _timer('values', timing_raw):
-                            values = self.critic_wg.compute_values(batch)
-                            batch = batch.union(values)
-
                     with _timer('adv', timing_raw):
-                        # compute scores. Support both model and function-based.
-                        # We first compute the scores using reward model. Then, we call reward_fn to combine
-                        # the results from reward model and rule-based results.
+                        # compute scores
                         if self.use_rm:
-                            # we first compute reward model score
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
 
-                        # we combine with rule-based rm
+                        # combine with rule-based rm
                         reward_tensor = self.reward_fn(batch)
                         batch.batch['token_level_scores'] = reward_tensor
 
-                        # compute rewards. apply_kl_penalty if available
+                        # compute rewards with knowledge distillation
                         if not self.config.actor_rollout_ref.actor.use_kl_loss:
                             batch, kl_metrics = apply_kl_penalty(batch,
                                                                  kl_ctrl=self.kl_ctrl,
@@ -799,7 +780,7 @@ class RayPPOTrainer(object):
                         else:
                             batch.batch['token_level_rewards'] = batch.batch['token_level_scores']
 
-                        # compute advantages, executed on the driver process
+                        # compute advantages
                         batch = compute_advantage(batch,
                                                   adv_estimator=self.config.algorithm.adv_estimator,
                                                   gamma=self.config.algorithm.gamma,
