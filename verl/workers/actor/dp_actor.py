@@ -19,6 +19,7 @@ import itertools
 from typing import Iterable, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 

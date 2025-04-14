@@ -442,6 +442,10 @@ class RayPPOTrainer(object):
         reward_tensor_lst = []
         data_source_lst = []
 
+        # Initialize the KnowledgeDistillation class with the retriever config path
+        from verl.trainer.ppo.knowledge_distillation import KnowledgeDistillation
+        kd = KnowledgeDistillation(retriever_config_path=self.config.retrievers.config_path)
+
         gen_config = GenerationConfig(
             max_turns=self.config.max_turns,
             max_start_length=self.config.data.max_start_length,
@@ -488,6 +492,21 @@ class RayPPOTrainer(object):
                 print('validation generation end')
 
                 test_batch = test_batch.union(test_output_gen_batch)
+                
+                # Apply knowledge distillation if needed
+                if hasattr(self, 'config') and hasattr(self.config, 'knowledge_distillation') and self.config.knowledge_distillation.enable:
+                    # Decode all prompts and responses at once
+                    prompts = [self.tokenizer.decode(input_ids) for input_ids in test_batch.batch['input_ids']]
+                    responses = [self.tokenizer.decode(response) for response in test_batch.batch['responses']]
+                    
+                    # Process the entire batch at once
+                    print("Processing validation batch for knowledge distillation...")
+                    teacher_reviews, student_reviews = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
+                    print(f"Knowledge distillation completed for {len(teacher_reviews)} validation examples")
+                    
+                    # Add reviews to batch for knowledge distillation loss
+                    test_batch.batch['teacher_reviews'] = teacher_reviews
+                    test_batch.batch['student_reviews'] = student_reviews
 
                 # evaluate using reward_function
                 # for certain reward function (e.g. sandbox), the generation can overlap with reward
@@ -522,6 +541,21 @@ class RayPPOTrainer(object):
                     
                     for key in test_batch.batch.keys():
                         test_batch.batch[key] = test_batch.batch[key].long()
+                    
+                    # Apply knowledge distillation if needed
+                    if hasattr(self, 'config') and hasattr(self.config, 'knowledge_distillation') and self.config.knowledge_distillation.enable:
+                        # Decode all prompts and responses at once
+                        prompts = [self.tokenizer.decode(input_ids) for input_ids in test_batch.batch['input_ids']]
+                        responses = [self.tokenizer.decode(response) for response in test_batch.batch['responses']]
+                        
+                        # Process the entire batch at once
+                        print("Processing validation batch for knowledge distillation...")
+                        teacher_reviews, student_reviews = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
+                        print(f"Knowledge distillation completed for {len(teacher_reviews)} validation examples")
+                        
+                        # Add reviews to batch for knowledge distillation loss
+                        test_batch.batch['teacher_reviews'] = teacher_reviews
+                        test_batch.batch['student_reviews'] = student_reviews
                     
                     # evaluate using reward_function
                     # for certain reward function (e.g. sandbox), the generation can overlap with reward
@@ -659,24 +693,31 @@ class RayPPOTrainer(object):
         logger = self.logger
         self.global_steps = 0
         
+        print("Starting PPO training with knowledge distillation...")
+        
         # Initialize knowledge distillation components
-        from verl.trainer.ppo.knowledge_distillation import (
-            get_teacher_review, get_student_review
-        )
+        from verl.trainer.ppo.knowledge_distillation import KnowledgeDistillation
+        
+        # Initialize the KnowledgeDistillation class with the retriever config path
+        kd = KnowledgeDistillation(retriever_config_path=self.config.retrievers.config_path)
+        print(f"Initialized KnowledgeDistillation with retriever config: {self.config.retrievers.config_path}")
         
         # Load teacher model (GPT-4)
-        teacher_model = self.config.knowledge_distillation.teacher_model
+        #teacher_model = self.config.knowledge_distillation.teacher_model
         
         # perform validation before training
         if self.val_reward_fn is not None and self.config.trainer.get('val_before_train', True):
+            print("Running initial validation before training...")
             val_metrics = self._validate()
             pprint(f'Initial validation metrics: {val_metrics}')
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get('val_only', False):
+                print("Validation only mode. Exiting training.")
                 return
 
         # we start from step 1
         self.global_steps += 1
+        print(f"Starting training from step {self.global_steps}")
 
         # Agent config preparation
         gen_config = GenerationConfig(
@@ -691,34 +732,45 @@ class RayPPOTrainer(object):
             topk = self.config.retriever.topk,
             retriever_config_path = self.config.retrievers.config_path,
         )
+        print(f"Generation config prepared: max_turns={gen_config.max_turns}, max_response_length={gen_config.max_response_length}")
 
         generation_manager = LLMGenerationManager(
             tokenizer=self.tokenizer,
             actor_rollout_wg=self.actor_rollout_wg,
             config=gen_config,
         )
+        print("LLMGenerationManager initialized")
 
         # start training loop
+        print(f"Starting training loop for {self.config.trainer.total_epochs} epochs")
         for epoch in range(self.config.trainer.total_epochs):
+            print(f"\n=== Starting Epoch {epoch+1}/{self.config.trainer.total_epochs} ===")
             for batch_dict in self.train_dataloader:
-                print(f'epoch {epoch}, step {self.global_steps}')
+                print(f'Processing epoch {epoch+1}, step {self.global_steps}')
                 metrics = {}
                 timing_raw = {}
 
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
+                print(f"Batch size: {len(batch.batch['input_ids'])}")
+                
                 batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n_agent, interleave=True)
+                print(f"Batch size after repeat: {len(batch.batch['input_ids'])}")
 
                 # pop those keys for generation
                 gen_batch = batch.pop(batch_keys=['input_ids', 'attention_mask', 'position_ids'])
+                print("Prepared generation batch")
 
                 with _timer('step', timing_raw):
                     if not self.config.do_search:
+                        print("Generating sequences without search...")
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
                         batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
                                                                 dtype=object)
                         batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                         batch = batch.union(gen_batch_output)
+                        print(f"Generated {len(gen_batch_output.batch['responses'])} sequences")
                     else:
+                        print("Generating sequences with search...")
                         first_input_ids = gen_batch.batch['input_ids'][:, -gen_config.max_start_length:].clone().long()
                         with _timer('gen', timing_raw):
                             generation_manager.timing_raw = timing_raw
@@ -726,112 +778,141 @@ class RayPPOTrainer(object):
                                 gen_batch=gen_batch,
                                 initial_input_ids=first_input_ids,
                             )
+                            print(f"LLM loop completed, generated {len(final_gen_batch_output.batch['responses'])} sequences")
                         
                         for key in final_gen_batch_output.batch.keys():
                             final_gen_batch_output.batch[key] = final_gen_batch_output.batch[key].long()
                         
                         with torch.no_grad():
+                            print("Computing log probabilities...")
                             output = self.actor_rollout_wg.compute_log_prob(final_gen_batch_output)
                             final_gen_batch_output = final_gen_batch_output.union(output)
                         
                         batch.non_tensor_batch['uid'] = batch.non_tensor_batch['index'].copy()
                         batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                         batch = batch.union(final_gen_batch_output)
+                        print(f"Final batch size after union: {len(batch.batch['responses'])}")
 
                     # Get teacher and student reviews for knowledge distillation
                     teacher_reviews = []
                     student_reviews = []
                     
                     # Process each example in the batch
-                    for i in range(len(batch.batch['responses'])):
-                        prompt = self.tokenizer.decode(batch.batch['input_ids'][i])
-                        response = self.tokenizer.decode(batch.batch['responses'][i])
-                        
-                        # Get reviews
-                        teacher_review = get_teacher_review(prompt, response, teacher_model)
-                        student_review = get_student_review(prompt, response, self.actor_rollout_wg)
-                        
-                        teacher_reviews.append(teacher_review)
-                        student_reviews.append(student_review)
+                    print(f"Knowledge Distillation Begins - Processing {len(batch.batch['responses'])} examples")
+                    
+                    # Decode all prompts and responses at once
+                    prompts = [self.tokenizer.decode(input_ids) for input_ids in batch.batch['input_ids']]
+                    responses = [self.tokenizer.decode(response) for response in batch.batch['responses']]
+                    
+                    # Process the entire batch at once
+                    print("Processing batch for knowledge distillation...")
+                    teacher_reviews, student_reviews = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
+                    print(f"Knowledge distillation completed for {len(teacher_reviews)} examples")
                     
                     # Add reviews to batch for knowledge distillation loss
                     batch.batch['teacher_reviews'] = teacher_reviews
                     batch.batch['student_reviews'] = student_reviews
                     
                     # balance the number of valid tokens on each dp rank
+                    print("Balancing batch across data parallel ranks...")
                     self._balance_batch(batch, metrics=metrics)
 
                     with _timer('adv', timing_raw):
+                        print("Computing advantages...")
                         # compute scores
                         if self.use_rm:
+                            print("Computing reward model scores...")
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
 
                         # combine with rule-based rm
+                        print("Computing rule-based reward scores...")
                         reward_tensor = self.reward_fn(batch)
                         batch.batch['token_level_scores'] = reward_tensor
 
                         # compute rewards with knowledge distillation
                         if not self.config.actor_rollout_ref.actor.use_kl_loss:
+                            print("Applying KL penalty...")
                             batch, kl_metrics = apply_kl_penalty(batch,
                                                                  kl_ctrl=self.kl_ctrl,
                                                                  kl_penalty=self.config.algorithm.kl_penalty)
                             metrics.update(kl_metrics)
                         else:
+                            print("Using token level scores directly as rewards...")
                             batch.batch['token_level_rewards'] = batch.batch['token_level_scores']
 
                         # compute advantages
+                        print(f"Computing advantages using {self.config.algorithm.adv_estimator}...")
                         batch = compute_advantage(batch,
                                                   adv_estimator=self.config.algorithm.adv_estimator,
                                                   gamma=self.config.algorithm.gamma,
                                                   lam=self.config.algorithm.lam,
                                                   num_repeat=self.config.actor_rollout_ref.rollout.n)
+                        print("Advantage computation completed")
 
                     # update critic
                     if self.use_critic:
+                        print("Updating critic...")
                         with _timer('update_critic', timing_raw):
                             critic_output = self.critic_wg.update_critic(batch)
                         critic_output_metrics = reduce_metrics(critic_output.meta_info['metrics'])
                         metrics.update(critic_output_metrics)
+                        print("Critic update completed")
 
                     # implement critic warmup
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
+                        print("Updating actor...")
                         with _timer('update_actor', timing_raw):
                             if self.config.do_search and self.config.actor_rollout_ref.actor.state_masking:
+                                print("Creating loss mask for state tokens...")
                                 batch, metrics = self._create_loss_mask(batch, metrics)
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info['metrics'])
                         metrics.update(actor_output_metrics)
+                        print("Actor update completed")
+                    else:
+                        print(f"Skipping actor update (critic warmup: {self.config.trainer.critic_warmup} > {self.global_steps})")
 
                     # validate
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and \
                         self.global_steps % self.config.trainer.test_freq == 0:
+                        print(f"Running validation at step {self.global_steps}...")
                         with _timer('testing', timing_raw):
                             val_metrics: dict = self._validate()
                         metrics.update(val_metrics)
+                        print(f"Validation completed with metrics: {val_metrics}")
 
                     if self.config.trainer.save_freq > 0 and \
                             self.global_steps % self.config.trainer.save_freq == 0:
+                        print(f"Saving checkpoint at step {self.global_steps}...")
                         with _timer('save_checkpoint', timing_raw):
                             self._save_checkpoint()
+                        print("Checkpoint saved")
 
                 # collect metrics
+                print("Computing data metrics...")
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+                print("Computing timing metrics...")
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
 
                 # TODO: make a canonical logger that supports various backend
+                print(f"Logging metrics for step {self.global_steps}...")
                 logger.log(data=metrics, step=self.global_steps)
 
                 self.global_steps += 1
+                print(f"Completed step {self.global_steps-1}, moving to next step")
 
                 if self.global_steps >= self.total_training_steps:
+                    print(f"Reached total training steps ({self.total_training_steps}), finishing training")
 
                     # perform validation after training
                     if self.val_reward_fn is not None:
+                        print("Running final validation...")
                         val_metrics = self._validate()
                         pprint(f'Final validation metrics: {val_metrics}')
                         logger.log(data=val_metrics, step=self.global_steps)
+                    print("Training completed successfully")
                     return
     
     def _create_loss_mask(self, batch, metrics):

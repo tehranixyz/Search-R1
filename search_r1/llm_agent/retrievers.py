@@ -46,7 +46,8 @@ class Retrievers:
                     api_key="EMPTY",
                     base_url=retriever_config["url"],
                 ),
-                "prompt_template": retriever_config["prompt_template"]
+                "prompt_template": retriever_config["prompt_template"],
+                "principles": retriever_config["principles"]
             }
 
 
