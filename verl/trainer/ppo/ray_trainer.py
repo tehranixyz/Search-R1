@@ -799,9 +799,6 @@ class RayPPOTrainer(object):
                         batch = batch.union(final_gen_batch_output)
                         print(f"Final batch size after union: {len(batch.batch['responses'])}")
 
-                    # Get teacher and student reviews for knowledge distillation
-                    teacher_prompts = []
-                    teacher_responses = []
                     
                     # Process each example in the batch
                     print(f"Knowledge Distillation Begins - Processing {len(batch.batch['responses'])} examples")
@@ -895,7 +892,6 @@ class RayPPOTrainer(object):
                         print("Updating actor...")
                         with _timer('update_actor', timing_raw):
                             if self.config.do_search and self.config.actor_rollout_ref.actor.state_masking:
-                                print("Creating loss mask for state tokens...")
                                 batch, metrics = self._create_loss_mask(batch, metrics)
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info['metrics'])

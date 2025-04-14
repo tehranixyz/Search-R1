@@ -289,37 +289,35 @@ class DataParallelPPOActor(BasePPOActor):
                     query_position_ids = torch.arange(0, query_input_ids.shape[1]).unsqueeze(0).expand_as(query_input_ids)
                     
                     # Forward pass through the student model with the queries
-                    with torch.no_grad():
-                        # We don't need gradients for the teacher's response
-                        student_output = self.actor_module(
-                            input_ids=query_input_ids,
-                            attention_mask=query_attention_mask,
-                            position_ids=query_position_ids,
-                            use_cache=False
-                        )
-                        
-                        # Get the logits from the student model
-                        student_logits = student_output.logits
-                        
-                        # Compute the log probabilities of the teacher's response tokens
-                        # We need to shift the teacher's input IDs to align with the student's logits
-                        # The logits at position i predict the token at position i+1
-                        shifted_teacher_input_ids = teacher_input_ids[:, 1:]
-                        student_log_probs = F.log_softmax(student_logits[:, :-1], dim=-1)
-                        
-                        # Get the log probabilities of the teacher's tokens
-                        teacher_token_log_probs = torch.gather(
-                            student_log_probs, 
-                            dim=-1, 
-                            index=shifted_teacher_input_ids.unsqueeze(-1)
-                        ).squeeze(-1)
-                        
-                        # Create a mask for the teacher's response tokens
-                        teacher_attention_mask = teacher_tokens['attention_mask']
-                        teacher_response_mask = teacher_attention_mask[:, 1:]
-                        
-                        # Compute the cross-entropy loss (negative log likelihood)
-                        kd_loss = -torch.sum(teacher_token_log_probs * teacher_response_mask) / torch.sum(teacher_response_mask)
+                    student_output = self.actor_module(
+                        input_ids=query_input_ids,
+                        attention_mask=query_attention_mask,
+                        position_ids=query_position_ids,
+                        use_cache=False
+                    )
+                    
+                    # Get the logits from the student model
+                    student_logits = student_output.logits
+                    
+                    # Compute the log probabilities of the teacher's response tokens
+                    # We need to shift the teacher's input IDs to align with the student's logits
+                    # The logits at position i predict the token at position i+1
+                    shifted_teacher_input_ids = teacher_input_ids[:, 1:]
+                    student_log_probs = F.log_softmax(student_logits[:, :-1], dim=-1)
+                    
+                    # Get the log probabilities of the teacher's tokens
+                    teacher_token_log_probs = torch.gather(
+                        student_log_probs, 
+                        dim=-1, 
+                        index=shifted_teacher_input_ids.unsqueeze(-1)
+                    ).squeeze(-1)
+                    
+                    # Create a mask for the teacher's response tokens
+                    teacher_attention_mask = teacher_tokens['attention_mask']
+                    teacher_response_mask = teacher_attention_mask[:, 1:]
+                    
+                    # Compute the cross-entropy loss (negative log likelihood)
+                    kd_loss = -torch.sum(teacher_token_log_probs * teacher_response_mask) / torch.sum(teacher_response_mask)
                     
                     policy_loss = policy_loss + kd_loss * self.config.kd_loss_coef
                     metrics['actor/kd_loss'] = kd_loss.detach().item()
