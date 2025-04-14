@@ -295,21 +295,45 @@ class KnowledgeDistillation:
             tokenizer (Any, optional): The tokenizer to use. If None, will use student_model.tokenizer.
             
         Returns:
-            Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]: Tuple containing tokenized teacher and student reviews.
+            Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]: Tuple containing tokenized queries and teacher responses.
             Each dictionary contains 'input_ids' and 'attention_mask' tensors.
         """
         print(f"Getting teacher reviews for batch of {len(prompts)} examples...")
         teacher_reviews = self.get_teacher_reviews_batch(prompts, responses)
         print(f"Completed getting {len(teacher_reviews)} teacher reviews")
         
-        print(f"Getting student reviews for batch of {len(prompts)} examples...")
-        student_reviews = self.get_student_reviews_batch(prompts, responses, student_model, tokenizer)
-        print(f"Completed getting {len(student_reviews)} student reviews")
+        # Extract information from prompts
+        prompt_infos = self.extract_prompt_info_batch(prompts)
         
-        # Tokenize the reviews
-        print("Tokenizing teacher and student reviews...")
+        # Extract translations from responses
+        translated_codes = self.extract_translation_batch(responses)
+        
+        # Prepare batch data
+        queries = []
+        
+        for i, (prompt_info, translated_code) in enumerate(zip(prompt_infos, translated_codes)):
+            # Map principle to preference name
+            preference = self.map_principle_to_preference(prompt_info['principle'])
+            
+            # Create assessment query
+            query = self.create_assessment_query(
+                source_code=prompt_info['source_code'],
+                translated_code=translated_code,
+                src_lang=prompt_info['source_language'],
+                trg_lang=prompt_info['target_language'],
+                preference=preference
+            )
+            
+            queries.append(query)
+        
+        # Tokenize the queries
+        print("Tokenizing queries...")
+        query_tokens = tokenizer(queries, return_tensors="pt", padding=True, truncation=True)
+        print("Query tokenization complete")
+        
+        # Tokenize the teacher reviews
+        print("Tokenizing teacher reviews...")
         teacher_tokens = tokenizer(teacher_reviews, return_tensors="pt", padding=True, truncation=True)
-        student_tokens = tokenizer(student_reviews, return_tensors="pt", padding=True, truncation=True)
-        print("Tokenization complete")
+        print("Teacher review tokenization complete")
         
-        return teacher_tokens, student_tokens
+        return query_tokens, teacher_tokens

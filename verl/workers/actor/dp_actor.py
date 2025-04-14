@@ -215,7 +215,7 @@ class DataParallelPPOActor(BasePPOActor):
         if self.config.use_kl_loss:
             select_keys.append('ref_log_prob')
         if self.config.use_kd_loss:
-            select_keys.extend(['teacher_reviews', 'student_reviews'])
+            select_keys.extend(['teacher_prompts', 'teacher_responses'])
         batch = data.select(batch_keys=select_keys).batch
 
         # Split to make minibatch iterator for updating the actor
@@ -274,16 +274,52 @@ class DataParallelPPOActor(BasePPOActor):
                     metrics['actor/kl_coef'] = self.config.kl_loss_coef
 
                 if self.config.use_kd_loss:
-                    # Compute knowledge distillation loss
-                    teacher_tokens = data['teacher_reviews']
-                    student_tokens = data['student_reviews']
+                    # Compute knowledge distillation loss using supervised learning approach
+                    query_tokens = data['teacher_prompts']  # This is now the query tokens
+                    teacher_tokens = data['teacher_responses']  # This is now the teacher response tokens
                     
-                    # Get embeddings directly from the tokenized reviews
-                    teacher_emb = teacher_tokens['input_ids'].float().mean(dim=1)
-                    student_emb = student_tokens['input_ids'].float().mean(dim=1)
+                    # Get the input IDs and attention mask for the queries
+                    query_input_ids = query_tokens['input_ids']
+                    query_attention_mask = query_tokens['attention_mask']
                     
-                    # Compute cosine similarity loss (1 - similarity)
-                    kd_loss = 1 - F.cosine_similarity(teacher_emb, student_emb).mean()
+                    # Get the input IDs for the teacher responses (labels)
+                    teacher_input_ids = teacher_tokens['input_ids']
+                    
+                    # Create position IDs for the queries
+                    query_position_ids = torch.arange(0, query_input_ids.shape[1]).unsqueeze(0).expand_as(query_input_ids)
+                    
+                    # Forward pass through the student model with the queries
+                    with torch.no_grad():
+                        # We don't need gradients for the teacher's response
+                        student_output = self.actor_module(
+                            input_ids=query_input_ids,
+                            attention_mask=query_attention_mask,
+                            position_ids=query_position_ids,
+                            use_cache=False
+                        )
+                        
+                        # Get the logits from the student model
+                        student_logits = student_output.logits
+                        
+                        # Compute the log probabilities of the teacher's response tokens
+                        # We need to shift the teacher's input IDs to align with the student's logits
+                        # The logits at position i predict the token at position i+1
+                        shifted_teacher_input_ids = teacher_input_ids[:, 1:]
+                        student_log_probs = F.log_softmax(student_logits[:, :-1], dim=-1)
+                        
+                        # Get the log probabilities of the teacher's tokens
+                        teacher_token_log_probs = torch.gather(
+                            student_log_probs, 
+                            dim=-1, 
+                            index=shifted_teacher_input_ids.unsqueeze(-1)
+                        ).squeeze(-1)
+                        
+                        # Create a mask for the teacher's response tokens
+                        teacher_attention_mask = teacher_tokens['attention_mask']
+                        teacher_response_mask = teacher_attention_mask[:, 1:]
+                        
+                        # Compute the cross-entropy loss (negative log likelihood)
+                        kd_loss = -torch.sum(teacher_token_log_probs * teacher_response_mask) / torch.sum(teacher_response_mask)
                     
                     policy_loss = policy_loss + kd_loss * self.config.kd_loss_coef
                     metrics['actor/kd_loss'] = kd_loss.detach().item()
