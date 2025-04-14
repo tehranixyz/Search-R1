@@ -279,8 +279,8 @@ class DataParallelPPOActor(BasePPOActor):
                     student_tokens = data['student_reviews']
                     
                     # Get embeddings directly from the tokenized reviews
-                    teacher_emb = teacher_tokens['input_ids'].mean(dim=1)
-                    student_emb = student_tokens['input_ids'].mean(dim=1)
+                    teacher_emb = teacher_tokens['input_ids'].float().mean(dim=1)
+                    student_emb = student_tokens['input_ids'].float().mean(dim=1)
                     
                     # Compute cosine similarity loss (1 - similarity)
                     kd_loss = 1 - F.cosine_similarity(teacher_emb, student_emb).mean()
