@@ -817,6 +817,27 @@ class RayPPOTrainer(object):
                     print("Balancing batch across data parallel ranks...")
                     self._balance_batch(batch, metrics=metrics)
 
+                    # compute global_valid tokens
+                    batch.meta_info['global_token_num'] = torch.sum(batch.batch['attention_mask'], dim=-1).tolist()
+
+                    # batch.batch.apply(lambda x, key: x.long() if key != "old_log_probs" else x, inplace=True, key=True)
+                    print("Converting batch tensors to long type...")
+                    for key in batch.batch.keys():
+                        if key not in ['old_log_probs', 'teacher_reviews', 'student_reviews']:
+                            batch.batch[key] = batch.batch[key].long()
+
+                    if self.use_reference_policy:
+                        # compute reference log_prob
+                        with _timer('ref', timing_raw):
+                            ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
+                            batch = batch.union(ref_log_prob)
+
+                    # compute values
+                    if self.use_critic:
+                        with _timer('values', timing_raw):
+                            values = self.critic_wg.compute_values(batch)
+                            batch = batch.union(values)
+
                     with _timer('adv', timing_raw):
                         print("Computing advantages...")
                         # compute scores
