@@ -437,7 +437,7 @@ class KnowledgeDistillation:
         
         return student_reviews_batch
     
-    def process_batch(self, prompts: List[str], responses: List[str], student_model: Any, tokenizer: Any = None) -> Tuple[List[str], List[str]]:
+    def process_batch(self, prompts: List[str], responses: List[str], student_model: Any, tokenizer: Any = None) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
         """
         Process a batch of prompt-response pairs to get teacher and student reviews.
         
@@ -448,7 +448,8 @@ class KnowledgeDistillation:
             tokenizer (Any, optional): The tokenizer to use. If None, will use student_model.tokenizer.
             
         Returns:
-            Tuple[List[str], List[str]]: Tuple containing teacher and student reviews.
+            Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]: Tuple containing tokenized teacher and student reviews.
+            Each dictionary contains 'input_ids' and 'attention_mask' tensors.
         """
         print(f"Getting teacher reviews for batch of {len(prompts)} examples...")
         teacher_reviews = self.get_teacher_reviews_batch(prompts, responses)
@@ -458,4 +459,10 @@ class KnowledgeDistillation:
         student_reviews = self.get_student_reviews_batch(prompts, responses, student_model, tokenizer)
         print(f"Completed getting {len(student_reviews)} student reviews")
         
-        return teacher_reviews, student_reviews
+        # Tokenize the reviews
+        print("Tokenizing teacher and student reviews...")
+        teacher_tokens = tokenizer(teacher_reviews, return_tensors="pt", padding=True, truncation=True)
+        student_tokens = tokenizer(student_reviews, return_tensors="pt", padding=True, truncation=True)
+        print("Tokenization complete")
+        
+        return teacher_tokens, student_tokens

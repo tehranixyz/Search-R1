@@ -275,14 +275,10 @@ class DataParallelPPOActor(BasePPOActor):
 
                 if self.config.use_kd_loss:
                     # Compute knowledge distillation loss
-                    teacher_reviews = data['teacher_reviews']
-                    student_reviews = data['student_reviews']
+                    teacher_tokens = data['teacher_reviews']
+                    student_tokens = data['student_reviews']
                     
-                    # Tokenize reviews
-                    teacher_tokens = self.tokenizer(teacher_reviews, return_tensors="pt", padding=True, truncation=True)
-                    student_tokens = self.tokenizer(student_reviews, return_tensors="pt", padding=True, truncation=True)
-                    
-                    # Get embeddings
+                    # Get embeddings directly from the tokenized reviews
                     teacher_emb = teacher_tokens['input_ids'].mean(dim=1)
                     student_emb = student_tokens['input_ids'].mean(dim=1)
                     

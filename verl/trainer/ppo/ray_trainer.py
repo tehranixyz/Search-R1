@@ -501,12 +501,12 @@ class RayPPOTrainer(object):
                     
                     # Process the entire batch at once
                     print("Processing validation batch for knowledge distillation...")
-                    teacher_reviews, student_reviews = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
-                    print(f"Knowledge distillation completed for {len(teacher_reviews)} validation examples")
+                    teacher_tokens, student_tokens = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
+                    print(f"Knowledge distillation completed for {len(teacher_tokens['input_ids'])} validation examples")
                     
-                    # Add reviews to batch for knowledge distillation loss
-                    test_batch.batch['teacher_reviews'] = teacher_reviews
-                    test_batch.batch['student_reviews'] = student_reviews
+                    # Add tokenized reviews to batch for knowledge distillation loss
+                    test_batch.batch['teacher_reviews'] = teacher_tokens
+                    test_batch.batch['student_reviews'] = student_tokens
 
                 # evaluate using reward_function
                 # for certain reward function (e.g. sandbox), the generation can overlap with reward
@@ -550,12 +550,12 @@ class RayPPOTrainer(object):
                         
                         # Process the entire batch at once
                         print("Processing validation batch for knowledge distillation...")
-                        teacher_reviews, student_reviews = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
-                        print(f"Knowledge distillation completed for {len(teacher_reviews)} validation examples")
+                        teacher_tokens, student_tokens = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
+                        print(f"Knowledge distillation completed for {len(teacher_tokens['input_ids'])} validation examples")
                         
-                        # Add reviews to batch for knowledge distillation loss
-                        test_batch.batch['teacher_reviews'] = teacher_reviews
-                        test_batch.batch['student_reviews'] = student_reviews
+                        # Add tokenized reviews to batch for knowledge distillation loss
+                        test_batch.batch['teacher_reviews'] = teacher_tokens
+                        test_batch.batch['student_reviews'] = student_tokens
                     
                     # evaluate using reward_function
                     # for certain reward function (e.g. sandbox), the generation can overlap with reward
@@ -806,12 +806,12 @@ class RayPPOTrainer(object):
                     
                     # Process the entire batch at once
                     print("Processing batch for knowledge distillation...")
-                    teacher_reviews, student_reviews = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
-                    print(f"Knowledge distillation completed for {len(teacher_reviews)} examples")
+                    teacher_tokens, student_tokens = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
+                    print(f"Knowledge distillation completed for {len(teacher_tokens['input_ids'])} examples")
                     
-                    # Add reviews to batch for knowledge distillation loss
-                    batch.batch['teacher_reviews'] = teacher_reviews
-                    batch.batch['student_reviews'] = student_reviews
+                    # Add tokenized reviews to batch for knowledge distillation loss
+                    batch.batch['teacher_reviews'] = teacher_tokens
+                    batch.batch['student_reviews'] = student_tokens
                     
                     # balance the number of valid tokens on each dp rank
                     print("Balancing batch across data parallel ranks...")
