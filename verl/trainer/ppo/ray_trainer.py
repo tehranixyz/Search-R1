@@ -502,15 +502,17 @@ class RayPPOTrainer(object):
                     
                     # Process the entire batch at once
                     print("Processing validation batch for knowledge distillation...")
-                    query_tokens, teacher_tokens = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
-                    print(f"Knowledge distillation completed for {len(query_tokens['input_ids'])} validation examples")
+                    query_tokens, teacher_tokens, attention_masks = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
+                    print(f"Knowledge distillation completed for {len(query_tokens)} validation examples")
                     
                     # Add tokenized queries and teacher responses to batch for knowledge distillation loss
                     # Note: We're using more descriptive field names
                     # 'teacher_prompts' contains the query tokens
                     # 'teacher_responses' contains the teacher response tokens
+                    # 'teacher_attention_masks' contains the attention masks
                     test_batch.batch['teacher_prompts'] = query_tokens
                     test_batch.batch['teacher_responses'] = teacher_tokens
+                    test_batch.batch['teacher_attention_masks'] = attention_masks
 
                 # evaluate using reward_function
                 # for certain reward function (e.g. sandbox), the generation can overlap with reward
@@ -554,15 +556,17 @@ class RayPPOTrainer(object):
                         
                         # Process the entire batch at once
                         print("Processing validation batch for knowledge distillation...")
-                        query_tokens, teacher_tokens = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
-                        print(f"Knowledge distillation completed for {len(query_tokens['input_ids'])} examples")
+                        query_tokens, teacher_tokens, attention_masks = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
+                        print(f"Knowledge distillation completed for {len(query_tokens)} examples")
                         
                         # Add tokenized queries and teacher responses to batch for knowledge distillation loss
                         # Note: We're using more descriptive field names
                         # 'teacher_prompts' contains the query tokens
                         # 'teacher_responses' contains the teacher response tokens
+                        # 'teacher_attention_masks' contains the attention masks
                         test_batch.batch['teacher_prompts'] = query_tokens
                         test_batch.batch['teacher_responses'] = teacher_tokens
+                        test_batch.batch['teacher_attention_masks'] = attention_masks
                     
                     # evaluate using reward_function
                     # for certain reward function (e.g. sandbox), the generation can overlap with reward
@@ -810,15 +814,17 @@ class RayPPOTrainer(object):
                     
                     # Process the entire batch at once
                     print("Processing batch for knowledge distillation...")
-                    query_tokens, teacher_tokens = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
-                    print(f"Knowledge distillation completed for {len(query_tokens['input_ids'])} examples")
+                    query_tokens, teacher_tokens, attention_masks = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
+                    print(f"Knowledge distillation completed for {len(query_tokens)} examples")
                     
                     # Add tokenized queries and teacher responses to batch for knowledge distillation loss
                     # Note: We're using more descriptive field names
                     # 'teacher_prompts' contains the query tokens
                     # 'teacher_responses' contains the teacher response tokens
+                    # 'teacher_attention_masks' contains the attention masks
                     batch.batch['teacher_prompts'] = query_tokens
                     batch.batch['teacher_responses'] = teacher_tokens
+                    batch.batch['teacher_attention_masks'] = attention_masks
                     
                     # balance the number of valid tokens on each dp rank
                     print("Balancing batch across data parallel ranks...")

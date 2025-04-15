@@ -1,14 +1,19 @@
 import torch
 import torch.nn.functional as F
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 import os
 import re
 import json
+import logging
 from search_r1.llm_agent.retrievers import Retrievers
 from openai import OpenAI
 from verl.protocol import DataProto
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # TODO:
 # 1. Extract Information from prompt: source code, src_lang, trg_lang and principle
@@ -22,16 +27,20 @@ class KnowledgeDistillation:
     getting reviews from teacher and student models.
     """
     
-    def __init__(self, retriever_config_path: str = None):
+    def __init__(self, retriever_config_path: str = None, max_combined_length: int = 4608):
         """
         Initialize the KnowledgeDistillation class.
         
         Args:
             retriever_config_path (str, optional): Path to the retriever configuration file.
+            max_combined_length (int, optional): Maximum combined length for queries and teacher responses.
+                Defaults to 4608.
         """
         self.retrievers = None
         if retriever_config_path:
             self.retrievers = Retrievers(json_path=retriever_config_path, test_mode=True)
+        self.max_combined_length = max_combined_length
+        logger.info(f"Initialized KnowledgeDistillation with max_combined_length={max_combined_length}")
     
     def extract_prompt_info(self, prompt: str) -> Dict[str, str]:
         """
@@ -284,7 +293,7 @@ class KnowledgeDistillation:
         
         return student_reviews_batch
     
-    def process_batch(self, prompts: List[str], responses: List[str], student_model: Any, tokenizer: Any = None) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+    def process_batch(self, prompts: List[str], responses: List[str], student_model: Any, tokenizer: Any = None) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
         """
         Process a batch of prompt-response pairs to get teacher and student reviews.
         
@@ -295,12 +304,22 @@ class KnowledgeDistillation:
             tokenizer (Any, optional): The tokenizer to use. If None, will use student_model.tokenizer.
             
         Returns:
-            Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]: Tuple containing tokenized queries and teacher responses.
-            Each dictionary contains 'input_ids' and 'attention_mask' tensors.
+            Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]: Tuple containing:
+                - input_ids_batch: List of input ID tensors
+                - labels_batch: List of label tensors
+                - attention_mask_batch: List of attention mask tensors
         """
-        print(f"Getting teacher reviews for batch of {len(prompts)} examples...")
+        logger.info(f"Getting teacher reviews for batch of {len(prompts)} examples...")
         teacher_reviews = self.get_teacher_reviews_batch(prompts, responses)
-        print(f"Completed getting {len(teacher_reviews)} teacher reviews")
+        logger.info(f"Completed getting {len(teacher_reviews)} teacher reviews")
+        
+        # Check for empty or invalid teacher reviews
+        valid_indices = []
+        for i, review in enumerate(teacher_reviews):
+            if review and not review.startswith("No translation found"):
+                valid_indices.append(i)
+            else:
+                logger.warning(f"Invalid or empty teacher review for example {i}: {review[:100]}...")
         
         # Extract information from prompts
         prompt_infos = self.extract_prompt_info_batch(prompts)
@@ -326,14 +345,61 @@ class KnowledgeDistillation:
             
             queries.append(query)
         
-        # Tokenize the queries
-        print("Tokenizing queries...")
-        query_tokens = tokenizer(queries, return_tensors="pt", padding=True, truncation=True)
-        print("Query tokenization complete")
+        # Tokenize the queries with attention masks
+        logger.info("Tokenizing queries...")
+        prompt_enc = tokenizer(queries, padding="max_length", truncation=True, max_length=4096, 
+                              return_attention_mask=True, add_special_tokens=False)
+        logger.info("Query tokenization complete")
         
-        # Tokenize the teacher reviews
-        print("Tokenizing teacher reviews...")
-        teacher_tokens = tokenizer(teacher_reviews, return_tensors="pt", padding=True, truncation=True)
-        print("Teacher review tokenization complete")
+        # Tokenize the teacher reviews with attention masks
+        logger.info("Tokenizing teacher reviews...")
+        answer_enc = tokenizer(teacher_reviews, padding="max_length", truncation=True, max_length=512, 
+                              return_attention_mask=True, add_special_tokens=False)
+        logger.info("Teacher review tokenization complete")
+
+        # Verify pad_token_id is set
+        if tokenizer.pad_token_id is None:
+            logger.warning("Tokenizer pad_token_id is None. Setting to eos_token_id.")
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+
+        input_ids_batch = []
+        labels_batch = []
+        attention_mask_batch = []
+
+        for i, (prompt_ids, prompt_mask, answer_ids, answer_mask) in enumerate(zip(
+            prompt_enc["input_ids"], prompt_enc["attention_mask"], 
+            answer_enc["input_ids"], answer_enc["attention_mask"]
+        )):
+            # Combine input IDs and attention masks
+            input_ids = prompt_ids + answer_ids
+            attention_mask = prompt_mask + answer_mask
+            
+            # Create labels (ignore prompt part with -100)
+            labels = [-100] * len(prompt_ids) + answer_ids
+
+            # Truncate to max_combined_length and pad if needed
+            input_ids = input_ids[:self.max_combined_length]
+            labels = labels[:self.max_combined_length]
+            attention_mask = attention_mask[:self.max_combined_length]
+
+            # Calculate padding length
+            pad_len = self.max_combined_length - len(input_ids)
+            
+            # Pad input_ids, labels, and attention_mask
+            input_ids += [tokenizer.pad_token_id] * pad_len
+            labels += [-100] * pad_len
+            attention_mask += [0] * pad_len  # 0 for padding tokens
+            
+            # For invalid samples, set attention mask to 0 to prevent them from contributing to loss
+            if i not in valid_indices:
+                # Set all attention mask values to 0 for invalid samples
+                attention_mask = [0] * len(attention_mask)
+                logger.info(f"Marking example {i} as invalid by setting attention mask to 0")
+
+            # Convert to tensors
+            input_ids_batch.append(torch.tensor(input_ids, dtype=torch.long))
+            labels_batch.append(torch.tensor(labels, dtype=torch.long))
+            attention_mask_batch.append(torch.tensor(attention_mask, dtype=torch.long))
         
-        return query_tokens, teacher_tokens
+        logger.info(f"Processed {len(input_ids_batch)} examples for knowledge distillation, {len(valid_indices)} valid")
+        return input_ids_batch, labels_batch, attention_mask_batch
