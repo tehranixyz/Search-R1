@@ -392,6 +392,7 @@ class RayPPOTrainer(object):
                                            shuffle=self.config.data.shuffle_train_dataloader,
                                            drop_last=True,
                                            collate_fn=collate_fn)
+        print(f'Train dataloader: {len(self.train_dataloader)} batches of size {self.config.data.train_batch_size}')
 
         self.val_dataset = RLHFDataset(parquet_files=self.config.data.val_files,
                                        tokenizer=self.tokenizer,

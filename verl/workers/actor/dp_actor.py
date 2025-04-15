@@ -302,7 +302,7 @@ class DataParallelPPOActor(BasePPOActor):
                     # Compute the log probabilities of the teacher's response tokens
                     # We need to shift the teacher's input IDs to align with the student's logits
                     # The logits at position i predict the token at position i+1
-                    shifted_teacher_input_ids = teacher_input_ids[:, 1:]
+                    shifted_teacher_input_ids = teacher_input_ids[:, 1:].to(student_logits.device)
                     student_log_probs = F.log_softmax(student_logits[:, :-1], dim=-1)
                     
                     # Get the log probabilities of the teacher's tokens
@@ -315,6 +315,9 @@ class DataParallelPPOActor(BasePPOActor):
                     # Create a mask for the teacher's response tokens
                     teacher_attention_mask = teacher_tokens['attention_mask']
                     teacher_response_mask = teacher_attention_mask[:, 1:]
+                    
+                    # Move teacher_response_mask to the same device as teacher_token_log_probs
+                    teacher_response_mask = teacher_response_mask.to(teacher_token_log_probs.device)
                     
                     # Compute the cross-entropy loss (negative log likelihood)
                     kd_loss = -torch.sum(teacher_token_log_probs * teacher_response_mask) / torch.sum(teacher_response_mask)
