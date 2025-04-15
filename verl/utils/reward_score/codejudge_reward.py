@@ -63,7 +63,7 @@ def compute_score(solution_str, ground_truth, method='strict', format_score=0.1,
     """
     # Extract the translation
     translation = extract_solution(solution_str)
-    do_print = random.randint(1, 64) == 1
+    do_print = random.randint(1, 1024) == 1
     
     if do_print:
         print(f"--------------------------------")

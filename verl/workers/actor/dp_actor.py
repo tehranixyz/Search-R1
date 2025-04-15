@@ -278,19 +278,9 @@ class DataParallelPPOActor(BasePPOActor):
                     input_ids = data['teacher_prompts']  # This is now the query tokens
                     labels = data['teacher_responses']  # This is now the teacher response tokens
                     
-                    print(f"KD input shape: {input_ids.shape}, labels shape: {labels.shape}")
-                    print(f"Sample input_ids: {input_ids[0][:50]}")  # Print first 50 tokens of first sample
-                    print(f"Sample labels: {labels[0][:50]}")  # Print first 50 tokens of first sample
-                    
-                    # Check if attention masks are available
                     if 'teacher_attention_masks' in data:
                         attention_mask = data['teacher_attention_masks']
-                        print(f"Attention mask shape: {attention_mask.shape}")
-                        print(f"Sample attention mask: {attention_mask[0][:50]}")
-                        
-                        # Create a mask for valid samples (where attention mask is not all zeros)
                         valid_mask = attention_mask.sum(dim=1) > 0
-                        print(f"Valid samples: {valid_mask.sum().item()}/{len(valid_mask)}")
                         
                         # If there are any valid samples, compute the loss only on those
                         if valid_mask.any():
@@ -299,34 +289,79 @@ class DataParallelPPOActor(BasePPOActor):
                             valid_labels = labels[valid_mask]
                             valid_attention_mask = attention_mask[valid_mask]
                             
-                            print(f"After filtering - input shape: {valid_input_ids.shape}, labels shape: {valid_labels.shape}")
-                            print(f"Non-padding tokens in labels: {(valid_labels != -100).sum().item()}")
-                            
-                            # Compute loss only on valid samples
-                            outputs = self.actor_module(input_ids=valid_input_ids, 
-                                                       attention_mask=valid_attention_mask, 
-                                                       labels=valid_labels)
-                            kd_loss = outputs.loss
-                            
-                            # Scale the loss by the ratio of valid samples to total samples
-                            scale_factor = valid_mask.float().mean()
-                            print(f"Loss scale factor: {scale_factor.item():.4f}")
-                            kd_loss = kd_loss / scale_factor
-                            print(f"KD loss before scaling: {outputs.loss.item():.4f}, after scaling: {kd_loss.item():.4f}")
+                            # Apply sequence parallelism for multi-GPU processing if enabled
+                            if self.use_ulysses_sp:
+                                # Pad and slice inputs for sequence parallelism
+                                valid_input_ids_padded, _, pad_size = ulysses_pad_and_slice_inputs(
+                                    valid_input_ids, 
+                                    None, 
+                                    sp_size=self.ulysses_sequence_parallel_size
+                                )
+                                
+                                # Pad attention mask if needed
+                                if pad_size > 0:
+                                    valid_attention_mask = torch.nn.functional.pad(
+                                        valid_attention_mask, 
+                                        (0, pad_size), 
+                                        value=0
+                                    )
+                                
+                                # Compute loss with sequence parallelism
+                                outputs = self.actor_module(
+                                    input_ids=valid_input_ids_padded, 
+                                    attention_mask=valid_attention_mask, 
+                                    labels=valid_labels
+                                )
+                                
+                                # Gather and unpad the loss
+                                kd_loss = outputs.loss
+                                
+                                # Scale the loss by the ratio of valid samples to total samples
+                                scale_factor = valid_mask.float().mean()
+                                kd_loss = kd_loss / scale_factor
+                            else:
+                                # Compute loss without sequence parallelism
+                                outputs = self.actor_module(
+                                    input_ids=valid_input_ids, 
+                                    attention_mask=valid_attention_mask, 
+                                    labels=valid_labels
+                                )
+                                kd_loss = outputs.loss
+                                
+                                # Scale the loss by the ratio of valid samples to total samples
+                                scale_factor = valid_mask.float().mean()
+                                kd_loss = kd_loss / scale_factor
                         else:
-                            print("Warning: No valid samples found for KD loss computation")
                             # If no valid samples, use a zero loss
                             kd_loss = torch.tensor(0.0, device=input_ids.device, requires_grad=True)
                     else:
-                        print("No attention masks found, computing KD loss on full sequences")
-                        # If attention masks are not available, proceed without them
-                        outputs = self.actor_module(input_ids=input_ids, labels=labels)
-                        kd_loss = outputs.loss
-                        print(f"KD loss (no masking): {kd_loss.item():.4f}")
-                    
+                        # Apply sequence parallelism for multi-GPU processing if enabled
+                        if self.use_ulysses_sp:
+                            # Pad and slice inputs for sequence parallelism
+                            input_ids_padded, _, pad_size = ulysses_pad_and_slice_inputs(
+                                input_ids, 
+                                None, 
+                                sp_size=self.ulysses_sequence_parallel_size
+                            )
+                            
+                            # Compute loss with sequence parallelism
+                            outputs = self.actor_module(
+                                input_ids=input_ids_padded, 
+                                labels=labels
+                            )
+                            kd_loss = outputs.loss
+                        else:
+                            # If attention masks are not available, proceed without them
+                            outputs = self.actor_module(input_ids=input_ids, labels=labels)
+                            kd_loss = outputs.loss
+
+
+                    print(f"KD Loss: {kd_loss.detach().item()}, Policy Loss before KD: {policy_loss.detach().item()}")
                     policy_loss = policy_loss + kd_loss * self.config.kd_loss_coef
+                    print(f"Policy Loss after KD: {policy_loss.detach().item()}")
                     metrics['actor/kd_loss'] = kd_loss.detach().item()
                     metrics['actor/kd_coef'] = self.config.kd_loss_coef
+
 
                 loss = policy_loss / self.gradient_accumulation
                 loss.backward()
