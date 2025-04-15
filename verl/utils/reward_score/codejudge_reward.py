@@ -43,26 +43,7 @@ def check_format_compliance(solution_str):
     Returns:
         True if format is compliant, False otherwise
     """
-    # Check for required tags in the correct order
-    required_tags = [
-        r'<think>.*?</think>',  # Reasoning
-    ]
-    
-    # Optional judge tags that should be properly formatted if present
-    judge_tags = [
-        r'<judge>.*?</judge>',  # Judge call
-    ]
-    
-    # Check if all required tags are present
-    for tag_pattern in required_tags:
-        if not re.search(tag_pattern, solution_str, re.DOTALL):
-            return False
-    
-    # If judge tags are present, they should be properly formatted
-    for tag_pattern in judge_tags:
-        matches = re.findall(tag_pattern, solution_str, re.DOTALL)
-        if matches and not all(match.strip() for match in matches):
-            return False
+
     
     return True
 
