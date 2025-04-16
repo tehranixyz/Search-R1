@@ -14,6 +14,127 @@
 
 import re
 import random
+from typing import Dict
+
+def extract_prompt_info(prompt: str) -> Dict[str, str]:
+    """
+    Extract source code, source language, target language, and principle from the prompt.
+    
+    Args:
+        prompt (str): The input prompt.
+        
+    Returns:
+        Dict[str, str]: Dictionary containing extracted information.
+    """
+    prompt_info = {
+        'source_code': '',
+        'source_language': '',
+        'target_language': '',
+        'principle': ''
+    }
+    
+    # Extract source code - look for code blocks with any language
+    source_code_pattern = r'```(?:.*?)\n(.*?)\n```'
+    source_code_match = re.search(source_code_pattern, prompt, re.DOTALL)
+    if source_code_match:
+        prompt_info['source_code'] = source_code_match.group(1).strip()
+    
+    # Extract source language
+    source_lang_pattern = r'Translate the following (.*?) code to'
+    source_lang_match = re.search(source_lang_pattern, prompt)
+    if source_lang_match:
+        prompt_info['source_language'] = source_lang_match.group(1).strip()
+    
+    # Extract target language
+    target_lang_pattern = r'to (.*?), adhering to'
+    target_lang_match = re.search(target_lang_pattern, prompt)
+    if target_lang_match:
+        prompt_info['target_language'] = target_lang_match.group(1).strip()
+    
+    # Extract principle
+    principle_pattern = r'Principle:\n(.*?)\n\n'
+    principle_match = re.search(principle_pattern, prompt, re.DOTALL)
+    if principle_match:
+        prompt_info['principle'] = principle_match.group(1).strip()
+    
+    return prompt_info
+
+def extract_translation(response: str) -> str:
+    """
+    Extract the translation from the response.
+    
+    Args:
+        response (str): The model's response.
+        
+    Returns:
+        str: The extracted translation if found, empty string otherwise.
+    """
+    translation_pattern = r'<translation>(.*?)</translation>'
+    match = re.search(translation_pattern, response, re.DOTALL)
+    
+    if match:
+        return match.group(1).strip()
+    return response
+
+def map_principle_to_preference(self, principle: str) -> str:
+    """
+    Map the principle to a preference name using the retrievers_config.json.
+    
+    Args:
+        principle (str): The principle text.
+        
+    Returns:
+        str: The mapped preference name.
+    """
+    if not self.retrievers:
+        return "Functional Equivalence"  # Default preference
+        
+    # Load the retrievers configuration
+    retriever_configs = self.retrievers.retrievers
+    
+    # Check each retriever's principles
+    for retriever_name, retriever_config in retriever_configs.items():
+        # Get the prompt template which contains the principles
+        principles = retriever_config["principles"]
+        
+        # Check if the principle is in the prompt template
+        if principle in principles:
+            return retriever_name
+    
+    # If no match is found, return the default preference
+    return "Functional Equivalence"
+
+def create_assessment_query(self, source_code: str, translated_code: str, 
+                            src_lang: str, trg_lang: str, preference: str) -> str:
+    """
+    Create a query using the relevant assessment template.
+    
+    Args:
+        source_code (str): The source code.
+        translated_code (str): The translated code.
+        src_lang (str): Source programming language.
+        trg_lang (str): Target programming language.
+        preference (str): The preference name.
+        
+    Returns:
+        str: The formatted query.
+    """
+    if not self.retrievers or preference not in self.retrievers.retrievers:
+        # Create a default query if retrievers are not available
+        return f"Evaluate the following code translation from {src_lang} to {trg_lang}:\n\nSource code:\n{source_code}\n\nTranslated code:\n{translated_code}"
+    
+    # Get the prompt template for the preference
+    prompt_template = self.retrievers.retrievers[preference]["prompt_template"]
+    
+    # Format the query using the template
+    query = prompt_template.format(
+        src_lang=src_lang,
+        trg_lang=trg_lang,
+        source_code=source_code,
+        translated_code=translated_code
+    )
+    
+    return query
 
 
 def extract_solution(solution_str):
@@ -33,42 +154,28 @@ def extract_solution(solution_str):
         return match.group(1).strip()
     return None
 
-
-def check_format_compliance(solution_str):
-    """Check if the solution follows the required format with proper tags.
+def extract_judge_score(judge_review: str) -> int:
+    """Extract the score from the judge review.
     
     Args:
-        solution_str: The solution text to check
+        judge_review: The judge review text
         
     Returns:
-        True if format is compliant, False otherwise
+        The extracted score if found, None otherwise
     """
-        # Check for required tags in the correct order
-    required_tags = [
-        r'<translation>.*?</translation>',  # Reasoning
-    ]
-    
-    # Optional judge tags that should be properly formatted if present
-    judge_tags = [
-        r'<judge>.*?</judge>',  # Judge call
-    ]
-    
-    # Check if all required tags are present
-    for tag_pattern in required_tags:
-        if not re.search(tag_pattern, solution_str, re.DOTALL):
-            return False
 
-    return True
+    score_pattern = r'score[ :,\s]*(.*?)([1-5])'  # Case insensitive search for 'score' followed by any characters and then an integer 1-5
+    match = re.search(score_pattern, judge_review, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return 0
 
-
-def compute_score(solution_str, ground_truth, method='strict', format_score=0.1, score=1.):
+def compute_score(solution_str, ground_truth, retrievers=None, score=1.0):
     """The scoring function for code translation task.
     
     Args:
         solution_str: The solution text
         ground_truth: The ground truth dictionary
-        method: The method to extract the solution (not used)
-        format_score: The score for correct format but wrong answer
         score: The score for the correct answer
         
     Returns:
@@ -80,7 +187,6 @@ def compute_score(solution_str, ground_truth, method='strict', format_score=0.1,
     
     if do_print:
         print(f"--------------------------------")
-        print(f"Ground truth: {ground_truth}")
         print(f"Extracted translation: {translation}")
         print(f"Solution string: {solution_str}")
     
@@ -88,22 +194,25 @@ def compute_score(solution_str, ground_truth, method='strict', format_score=0.1,
     if translation is None:
         if do_print:
             print(f"No translation found")
-        return 0
+        return 0, None, None
     
-    # Check format compliance
-    is_format_compliant = check_format_compliance(solution_str)
-    if not is_format_compliant:
-        if do_print:
-            print(f"Format not compliant")
-        return 0
-    
-    # If format is compliant but translation doesn't match ground truth
-    if translation != ground_truth.get('target', ''):
-        if do_print:
-            print(f"Format compliant but wrong translation")
-        return format_score
-    
-    # If everything is correct
-    if do_print:
-        print(f"Correct translation with proper format")
-    return score
+    prompt_info = extract_prompt_info(solution_str)
+    preference = map_principle_to_preference(prompt_info['principle'])
+    judge_review = retrievers.inquire(
+        retriever_name=preference, 
+        source_code=prompt_info['source_code'], 
+        translated_code=translation, 
+        src_lang=prompt_info['source_language'], 
+        trg_lang=prompt_info['target_language']
+    )
+    score = extract_judge_score(judge_review)
+
+    judge_query = create_assessment_query(
+                source_code=prompt_info['source_code'],
+                translated_code=translation,
+                src_lang=prompt_info['source_language'],
+                trg_lang=prompt_info['target_language'],
+                preference=preference
+            )
+
+    return score, judge_query, judge_review

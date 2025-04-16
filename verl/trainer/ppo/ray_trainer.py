@@ -443,10 +443,6 @@ class RayPPOTrainer(object):
         reward_tensor_lst = []
         data_source_lst = []
 
-        # Initialize the KnowledgeDistillation class with the retriever config path
-        from verl.trainer.ppo.knowledge_distillation import KnowledgeDistillation
-        kd = KnowledgeDistillation(retriever_config_path=self.config.retrievers.config_path)
-
         gen_config = GenerationConfig(
             max_turns=self.config.max_turns,
             max_start_length=self.config.data.max_start_length,
@@ -493,30 +489,15 @@ class RayPPOTrainer(object):
                 print('validation generation end')
 
                 test_batch = test_batch.union(test_output_gen_batch)
-                
-                # Apply knowledge distillation if needed
-                if hasattr(self, 'config') and hasattr(self.config, 'knowledge_distillation') and self.config.knowledge_distillation.enable:
-                    # Decode all prompts and responses at once
-                    prompts = [self.tokenizer.decode(input_ids) for input_ids in test_batch.batch['input_ids']]
-                    responses = [self.tokenizer.decode(response) for response in test_batch.batch['responses']]
                     
-                    # Process the entire batch at once
-                    print("Processing validation batch for knowledge distillation...")
-                    query_tokens, teacher_tokens, attention_masks = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
-                    print(f"Knowledge distillation completed for {len(query_tokens)} validation examples")
-                    
-                    # Add tokenized queries and teacher responses to batch for knowledge distillation loss
-                    # Note: We're using more descriptive field names
-                    # 'teacher_prompts' contains the query tokens
-                    # 'teacher_responses' contains the teacher response tokens
-                    # 'teacher_attention_masks' contains the attention masks
-                    test_batch.batch['teacher_prompts'] = query_tokens
-                    test_batch.batch['teacher_responses'] = teacher_tokens
-                    test_batch.batch['teacher_attention_masks'] = attention_masks
-
                 # evaluate using reward_function
                 # for certain reward function (e.g. sandbox), the generation can overlap with reward
                 reward_tensor = self.val_reward_fn(test_batch)
+
+                # Log the number of examples that will be ignored in loss calculation
+                ignored_count = sum(1 for mask in test_batch.batch['judge_response_attention_masks'] if sum(mask) == 0)
+                if ignored_count > 0:
+                    print(f"Note: {ignored_count} examples will be ignored in knowledge distillation loss calculation due to missing judge responses")
 
                 reward_tensor_lst.append(reward_tensor)
                 data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
@@ -550,30 +531,45 @@ class RayPPOTrainer(object):
                     
                     # Apply knowledge distillation if needed
                     if hasattr(self, 'config') and hasattr(self.config, 'knowledge_distillation') and self.config.knowledge_distillation.enable:
-                        # Decode all prompts and responses at once
-                        prompts = [self.tokenizer.decode(input_ids) for input_ids in test_batch.batch['input_ids']]
-                        responses = [self.tokenizer.decode(response) for response in test_batch.batch['responses']]
+                        # Check if judge queries and responses are available
+                        if 'judge_queries' in test_batch.batch and 'judge_responses' in test_batch.batch:
+                            print("Using judge queries and responses for validation knowledge distillation...")
+                            # Use judge queries and responses directly
+                            test_batch.batch['teacher_prompts'] = test_batch.batch['judge_queries']
+                            test_batch.batch['teacher_responses'] = test_batch.batch['judge_responses']
+                            test_batch.batch['teacher_attention_masks'] = test_batch.batch['judge_response_attention_masks']
+                            
+                            # Log the number of examples that will be ignored in loss calculation
+                            ignored_count = sum(1 for mask in test_batch.batch['judge_response_attention_masks'] if sum(mask) == 0)
+                            if ignored_count > 0:
+                                print(f"Note: {ignored_count} examples will be ignored in knowledge distillation loss calculation due to missing judge responses")
+                        else:
+                            # Fall back to the original knowledge distillation process
+                            print("Judge queries and responses not available, using original knowledge distillation process for validation...")
+                            # Decode all prompts and responses at once
+                            prompts = [self.tokenizer.decode(input_ids) for input_ids in test_batch.batch['input_ids']]
+                            responses = [self.tokenizer.decode(response) for response in test_batch.batch['responses']]
+                            
+                            # Process the entire batch at once
+                            print("Processing validation batch for knowledge distillation...")
+                            query_tokens, teacher_tokens, attention_masks = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
+                            print(f"Knowledge distillation completed for {len(query_tokens)} validation examples")
+                            
+                            # Add tokenized queries and teacher responses to batch for knowledge distillation loss
+                            # Note: We're using more descriptive field names
+                            # 'teacher_prompts' contains the query tokens
+                            # 'teacher_responses' contains the teacher response tokens
+                            # 'teacher_attention_masks' contains the attention masks
+                            test_batch.batch['teacher_prompts'] = query_tokens
+                            test_batch.batch['teacher_responses'] = teacher_tokens
+                            test_batch.batch['teacher_attention_masks'] = attention_masks
                         
-                        # Process the entire batch at once
-                        print("Processing validation batch for knowledge distillation...")
-                        query_tokens, teacher_tokens, attention_masks = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
-                        print(f"Knowledge distillation completed for {len(query_tokens)} examples")
-                        
-                        # Add tokenized queries and teacher responses to batch for knowledge distillation loss
-                        # Note: We're using more descriptive field names
-                        # 'teacher_prompts' contains the query tokens
-                        # 'teacher_responses' contains the teacher response tokens
-                        # 'teacher_attention_masks' contains the attention masks
-                        test_batch.batch['teacher_prompts'] = query_tokens
-                        test_batch.batch['teacher_responses'] = teacher_tokens
-                        test_batch.batch['teacher_attention_masks'] = attention_masks
-                    
-                    # evaluate using reward_function
-                    # for certain reward function (e.g. sandbox), the generation can overlap with reward
-                    reward_tensor = self.val_reward_fn(test_batch)
+                        # evaluate using reward_function
+                        # for certain reward function (e.g. sandbox), the generation can overlap with reward
+                        reward_tensor = self.val_reward_fn(test_batch)
 
-                    reward_tensor_lst.append(reward_tensor)
-                    data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
+                        reward_tensor_lst.append(reward_tensor)
+                        data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
 
         reward_tensor = torch.cat([rw.sum(-1) for rw in reward_tensor_lst], dim=0).cpu()  # (batch_size,)
         # reward_tensor = torch.cat(reward_tensor_lst, dim=0).sum(-1).cpu()  # (batch_size,)
@@ -706,13 +702,6 @@ class RayPPOTrainer(object):
         
         print("Starting PPO training with knowledge distillation...")
         
-        # Initialize knowledge distillation components
-        from verl.trainer.ppo.knowledge_distillation import KnowledgeDistillation
-        
-        # Initialize the KnowledgeDistillation class with the retriever config path
-        kd = KnowledgeDistillation(retriever_config_path=self.config.retrievers.config_path)
-        print(f"Initialized KnowledgeDistillation with retriever config: {self.config.retrievers.config_path}")
-        
         # Load teacher model (GPT-4)
         #teacher_model = self.config.knowledge_distillation.teacher_model
         
@@ -804,28 +793,6 @@ class RayPPOTrainer(object):
                         batch = batch.union(final_gen_batch_output)
                         print(f"Final batch size after union: {len(batch.batch['responses'])}")
 
-                    
-                    # Process each example in the batch
-                    print(f"Knowledge Distillation Begins - Processing {len(batch.batch['responses'])} examples")
-                    
-                    # Decode all prompts and responses at once
-                    prompts = [self.tokenizer.decode(input_ids) for input_ids in batch.batch['input_ids']]
-                    responses = [self.tokenizer.decode(response) for response in batch.batch['responses']]
-                    
-                    # Process the entire batch at once
-                    print("Processing batch for knowledge distillation...")
-                    query_tokens, teacher_tokens, attention_masks = kd.process_batch(prompts, responses, self.actor_rollout_wg, self.tokenizer)
-                    print(f"Knowledge distillation completed for {len(query_tokens)} examples")
-                    
-                    # Add tokenized queries and teacher responses to batch for knowledge distillation loss
-                    # Note: We're using more descriptive field names
-                    # 'teacher_prompts' contains the query tokens
-                    # 'teacher_responses' contains the teacher response tokens
-                    # 'teacher_attention_masks' contains the attention masks
-                    batch.batch['teacher_prompts'] = query_tokens
-                    batch.batch['teacher_responses'] = teacher_tokens
-                    batch.batch['teacher_attention_masks'] = attention_masks
-                    
                     # balance the number of valid tokens on each dp rank
                     print("Balancing batch across data parallel ranks...")
                     self._balance_batch(batch, metrics=metrics)
@@ -861,8 +828,13 @@ class RayPPOTrainer(object):
 
                         # combine with rule-based rm
                         print("Computing rule-based reward scores...")
-                        reward_tensor = self.reward_fn(batch)
+                        reward_tensor, judge_query, judge_response = self.reward_fn(batch)
                         batch.batch['token_level_scores'] = reward_tensor
+                        
+                        # Log the number of examples that will be ignored in loss calculation
+                        ignored_count = sum(1 for mask in batch.batch['judge_response_attention_masks'] if sum(mask) == 0)
+                        if ignored_count > 0:
+                            print(f"Note: {ignored_count} examples will be ignored in knowledge distillation loss calculation due to missing judge responses")
 
                         # compute rewards with knowledge distillation
                         if not self.config.actor_rollout_ref.actor.use_kl_loss:
