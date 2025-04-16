@@ -59,23 +59,6 @@ def extract_prompt_info(prompt: str) -> Dict[str, str]:
     
     return prompt_info
 
-def extract_translation(response: str) -> str:
-    """
-    Extract the translation from the response.
-    
-    Args:
-        response (str): The model's response.
-        
-    Returns:
-        str: The extracted translation if found, empty string otherwise.
-    """
-    translation_pattern = r'<translation>(.*?)</translation>'
-    match = re.search(translation_pattern, response, re.DOTALL)
-    
-    if match:
-        return match.group(1).strip()
-    return response
-
 def map_principle_to_preference(self, principle: str) -> str:
     """
     Map the principle to a preference name using the retrievers_config.json.
