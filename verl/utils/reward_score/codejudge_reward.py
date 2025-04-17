@@ -151,11 +151,11 @@ def extract_judge_score(judge_review: str) -> int:
     Returns:
         The extracted score if found, None otherwise
     """
-    score_pattern = r'score[ :,\s]*(.*?)([1-5])'  # Case insensitive search for 'score' followed by any characters and then an integer 1-5
-    match = re.search(score_pattern, judge_review, re.IGNORECASE)
+    score_pattern = r'[1-5]'
+    match = re.search(score_pattern, judge_review)
+    
     if match:
-        score = int(match.group(1))
-        return score
+        return int(match.group(0))
     return 0
 
 def compute_score(solution_str, ground_truth, retrievers=None, score=1.0):
@@ -180,13 +180,6 @@ def compute_score(solution_str, ground_truth, retrievers=None, score=1.0):
     prompt_info = extract_prompt_info(solution_str)
     preference = map_principle_to_preference(principle=prompt_info['principle'], retrievers=retrievers)
     
-    # Print details about the inquiry
-    print(f"Inquiry details:")
-    print(f"- Retriever: {preference}")
-    print(f"- Translated code: {translation}")
-    print(f"- Source language: {prompt_info['source_language']}")
-    print(f"- Target language: {prompt_info['target_language']}")
-    
     judge_review = retrievers.inquire(
         retriever_name=preference, 
         source_code=prompt_info['source_code'], 
@@ -204,5 +197,12 @@ def compute_score(solution_str, ground_truth, retrievers=None, score=1.0):
                 preference=preference,
                 retrievers=retrievers
             )
-
+    print("\n" + "="*50)
+    print("JUDGE QUERY")
+    print(f"{judge_query}\n")
+    print("JUDGE SCORE")
+    print(f"Score: {score}\n")
+    print("JUDGE REVIEW")
+    print(f"{judge_review}\n")
+    
     return score, judge_query, judge_review

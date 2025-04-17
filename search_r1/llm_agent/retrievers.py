@@ -1,5 +1,6 @@
 import json
 import os
+import random
 from openai import OpenAI
 from typing import List, Dict, Any
 
@@ -70,7 +71,51 @@ class Retrievers:
         
         if self.test_mode:
             # Return dummy response for testing purposes
-            return f"[TEST MODE] Dummy response from {retriever_name} for query: {query[:50]}..."
+            random_score = random.randint(1, 5)
+            
+            # Rationales for each score (4 per score)
+            rationales = {
+                1: [
+                    "The translation has significant errors that affect functionality.",
+                    "The code structure is completely different from the original.",
+                    "Critical logic is missing or incorrectly implemented.",
+                    "The translation fails to maintain the original algorithm's behavior.",
+                    "The code contains fundamental conceptual errors that make it unusable."
+                ],
+                2: [
+                    "The translation has several errors but maintains basic functionality.",
+                    "Some important features are missing or incorrectly implemented.",
+                    "The code structure differs significantly from the original.",
+                    "The translation has syntax errors that would prevent compilation.",
+                    "The code has logical errors that would cause incorrect results in most cases."
+                ],
+                3: [
+                    "The translation is mostly correct but has some minor issues.",
+                    "The code structure is similar but not identical to the original.",
+                    "Some edge cases are not handled correctly.",
+                    "The translation works but could be more idiomatic for the target language.",
+                    "The code has minor performance inefficiencies compared to the original."
+                ],
+                4: [
+                    "The translation is very good with only minor differences.",
+                    "The code structure closely matches the original with proper adaptations.",
+                    "All functionality is preserved with appropriate language-specific changes.",
+                    "The translation is correct and follows good practices for the target language.",
+                    "The code is well-optimized and handles all edge cases appropriately."
+                ],
+                5: [
+                    "The translation is perfect and maintains all functionality.",
+                    "The code structure is identical to the original with proper language adaptations.",
+                    "All edge cases are handled correctly.",
+                    "The translation is idiomatic and follows best practices for the target language.",
+                    "The code is highly optimized and includes appropriate error handling and documentation."
+                ]
+            }
+            
+            # Select a random rationale for the generated score
+            selected_rationale = random.choice(rationales[random_score])
+            
+            return f"{random_score} and\nRationale: {selected_rationale}"
         
         completion = retriever["client"].completions.create(model=retriever["model_name"], prompt=query)
         #print(f"Response from {retriever_name}:\n{completion}")
