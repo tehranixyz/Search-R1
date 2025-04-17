@@ -59,6 +59,11 @@ class DataParallelPPOActor(BasePPOActor):
 
         self.compute_entropy_from_logits = torch.compile(verl_F.entropy_from_logits, dynamic=True)
 
+
+        self.running_avg_policy_loss = 1.0  # init with small non-zero values to avoid divide-by-zero
+        self.running_avg_kd_loss = 1.0
+        self.ema_alpha = 0.98  # Smoothing factor (tweak as needed)
+
     def _forward_micro_batch(self, micro_batch, temperature) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns: 
@@ -337,10 +342,43 @@ class DataParallelPPOActor(BasePPOActor):
                                 labels=valid_judge_labels
                             )
                             kd_loss = outputs.loss
-                    
-                    logger.debug(f"KD Loss: {kd_loss.detach().item()}, Policy Loss before KD: {policy_loss.detach().item()}")
-                    policy_loss = policy_loss + kd_loss * self.config.kd_loss_coef
-                    logger.debug(f"Policy Loss after KD: {policy_loss.detach().item()}")
+
+                                        # Log initial losses
+                    logger.debug(
+                        f"Initial losses:\n"
+                        f"  - Policy Loss: {policy_loss.detach().item():.4f}\n"
+                        f"  - KD Loss: {kd_loss.detach().item():.4f}"
+                    )
+
+                    with torch.no_grad():
+                        self.running_avg_policy_loss = self.ema_alpha * self.running_avg_policy_loss + \
+                                                    (1 - self.ema_alpha) * policy_loss.detach().abs().item()
+                        self.running_avg_kd_loss = self.ema_alpha * self.running_avg_kd_loss + \
+                                                    (1 - self.ema_alpha) * kd_loss.detach().abs().item()
+
+                    # Normalize both losses
+                    eps = 1e-6
+                    safe_avg_policy = max(self.running_avg_policy_loss, eps)
+                    safe_avg_kd = max(self.running_avg_kd_loss, eps)
+
+                    normalized_policy_loss = policy_loss / (abs(safe_avg_policy) + eps)
+                    normalized_kd_loss = kd_loss / (abs(safe_avg_kd) + eps)
+
+                    # Combine using alpha
+                    alpha = self.config.get('loss_blend_alpha', 0.8)  # or put in config file
+                    policy_loss = alpha * normalized_policy_loss + (1 - alpha) * normalized_kd_loss
+
+                    # Log normalized and final losses
+                    logger.debug(
+                        f"Loss transformation:\n"
+                        f"  After normalization:\n"
+                        f"    - Policy Loss: {normalized_policy_loss.detach().item():.4f}\n"
+                        f"    - KD Loss: {normalized_kd_loss.detach().item():.4f}\n"
+                        f"  Final combination (α={alpha:.2f}):\n"
+                        f"    - Policy contribution: {alpha * normalized_policy_loss.detach().item():.4f}\n"
+                        f"    - KD contribution: {(1-alpha) * normalized_kd_loss.detach().item():.4f}\n"
+                        f"    - Combined loss: {policy_loss.detach().item():.4f}"
+                    )
                     metrics['actor/kd_loss'] = kd_loss.detach().item()
                     metrics['actor/kd_coef'] = self.config.kd_loss_coef
 
