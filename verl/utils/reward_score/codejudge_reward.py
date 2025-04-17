@@ -59,21 +59,22 @@ def extract_prompt_info(prompt: str) -> Dict[str, str]:
     
     return prompt_info
 
-def map_principle_to_preference(self, principle: str) -> str:
+def map_principle_to_preference(principle: str, retrievers=None) -> str:
     """
     Map the principle to a preference name using the retrievers_config.json.
     
     Args:
         principle (str): The principle text.
+        retrievers: The retrievers configuration object.
         
     Returns:
         str: The mapped preference name.
     """
-    if not self.retrievers:
+    if not retrievers:
         return "Functional Equivalence"  # Default preference
         
     # Load the retrievers configuration
-    retriever_configs = self.retrievers.retrievers
+    retriever_configs = retrievers.retrievers
     
     # Check each retriever's principles
     for retriever_name, retriever_config in retriever_configs.items():
@@ -87,8 +88,8 @@ def map_principle_to_preference(self, principle: str) -> str:
     # If no match is found, return the default preference
     return "Functional Equivalence"
 
-def create_assessment_query(self, source_code: str, translated_code: str, 
-                            src_lang: str, trg_lang: str, preference: str) -> str:
+def create_assessment_query(source_code: str, translated_code: str, 
+                            src_lang: str, trg_lang: str, preference: str, retrievers=None) -> str:
     """
     Create a query using the relevant assessment template.
     
@@ -98,16 +99,17 @@ def create_assessment_query(self, source_code: str, translated_code: str,
         src_lang (str): Source programming language.
         trg_lang (str): Target programming language.
         preference (str): The preference name.
+        retrievers: The retrievers configuration object.
         
     Returns:
         str: The formatted query.
     """
-    if not self.retrievers or preference not in self.retrievers.retrievers:
+    if not retrievers or preference not in retrievers.retrievers:
         # Create a default query if retrievers are not available
         return f"Evaluate the following code translation from {src_lang} to {trg_lang}:\n\nSource code:\n{source_code}\n\nTranslated code:\n{translated_code}"
     
     # Get the prompt template for the preference
-    prompt_template = self.retrievers.retrievers[preference]["prompt_template"]
+    prompt_template = retrievers.retrievers[preference]["prompt_template"]
     
     # Format the query using the template
     query = prompt_template.format(
@@ -119,7 +121,6 @@ def create_assessment_query(self, source_code: str, translated_code: str,
     
     return query
 
-
 def extract_solution(solution_str):
     """Extract the translation from the solution string.
     
@@ -130,12 +131,16 @@ def extract_solution(solution_str):
         The extracted translation if found, None otherwise
     """
     # Look for content between <translation> and </translation> tags
-    translation_pattern = r'<translation>(.*?)</translation>'
-    match = re.search(translation_pattern, solution_str, re.DOTALL)
+    answer_pattern = r'<translation>(.*?)</translation>'
+    match = re.finditer(answer_pattern, solution_str, re.DOTALL)
+    matches = list(match)
     
-    if match:
-        return match.group(1).strip()
-    return None
+    # If there are 0 or exactly 1 matches, return None
+    if len(matches) <= 1:
+        return None
+    
+    # If there are 2 or more matches, return the last one
+    return matches[-1].group(1).strip()
 
 def extract_judge_score(judge_review: str) -> int:
     """Extract the score from the judge review.
@@ -146,11 +151,11 @@ def extract_judge_score(judge_review: str) -> int:
     Returns:
         The extracted score if found, None otherwise
     """
-
     score_pattern = r'score[ :,\s]*(.*?)([1-5])'  # Case insensitive search for 'score' followed by any characters and then an integer 1-5
     match = re.search(score_pattern, judge_review, re.IGNORECASE)
     if match:
-        return int(match.group(1))
+        score = int(match.group(1))
+        return score
     return 0
 
 def compute_score(solution_str, ground_truth, retrievers=None, score=1.0):
@@ -159,6 +164,7 @@ def compute_score(solution_str, ground_truth, retrievers=None, score=1.0):
     Args:
         solution_str: The solution text
         ground_truth: The ground truth dictionary
+        retrievers: The retrievers configuration object
         score: The score for the correct answer
         
     Returns:
@@ -166,21 +172,21 @@ def compute_score(solution_str, ground_truth, retrievers=None, score=1.0):
     """
     # Extract the translation
     translation = extract_solution(solution_str)
-    do_print = random.randint(1, 1024) == 1
-    
-    if do_print:
-        print(f"--------------------------------")
-        print(f"Extracted translation: {translation}")
-        print(f"Solution string: {solution_str}")
     
     # If no translation found, return 0
     if translation is None:
-        if do_print:
-            print(f"No translation found")
         return 0, None, None
-    
+        
     prompt_info = extract_prompt_info(solution_str)
-    preference = map_principle_to_preference(prompt_info['principle'])
+    preference = map_principle_to_preference(principle=prompt_info['principle'], retrievers=retrievers)
+    
+    # Print details about the inquiry
+    print(f"Inquiry details:")
+    print(f"- Retriever: {preference}")
+    print(f"- Translated code: {translation}")
+    print(f"- Source language: {prompt_info['source_language']}")
+    print(f"- Target language: {prompt_info['target_language']}")
+    
     judge_review = retrievers.inquire(
         retriever_name=preference, 
         source_code=prompt_info['source_code'], 
@@ -195,7 +201,8 @@ def compute_score(solution_str, ground_truth, retrievers=None, score=1.0):
                 translated_code=translation,
                 src_lang=prompt_info['source_language'],
                 trg_lang=prompt_info['target_language'],
-                preference=preference
+                preference=preference,
+                retrievers=retrievers
             )
 
     return score, judge_query, judge_review

@@ -16,6 +16,7 @@ Single Process Actor
 """
 
 import itertools
+import logging
 from typing import Iterable, Tuple
 
 import torch
@@ -34,8 +35,11 @@ import verl.utils.torch_functional as verl_F
 
 from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_first_axis
 
-__all__ = ['DataParallelPPOActor']
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
+__all__ = ['DataParallelPPOActor']
 
 class DataParallelPPOActor(BasePPOActor):
 
@@ -50,7 +54,6 @@ class DataParallelPPOActor(BasePPOActor):
         self.actor_module = actor_module
         self.actor_optimizer = actor_optimizer
         self.use_remove_padding = self.config.get('use_remove_padding', False)
-        print(f'Actor use_remove_padding={self.use_remove_padding}')
         self.ulysses_sequence_parallel_size = self.config.ulysses_sequence_parallel_size
         self.use_ulysses_sp = self.ulysses_sequence_parallel_size > 1
 
@@ -63,6 +66,7 @@ class DataParallelPPOActor(BasePPOActor):
             log_probs: # (bs, response_len)
         """
         response_length = micro_batch['responses'].size(-1)
+        
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             input_ids = micro_batch['input_ids']
             batch_size, seqlen = input_ids.shape
@@ -187,7 +191,7 @@ class DataParallelPPOActor(BasePPOActor):
             micro_batches = batch.split(micro_batch_size)
 
         log_probs_lst = []
-        for micro_batch in micro_batches:
+        for i, micro_batch in enumerate(micro_batches):
             with torch.no_grad():
                 _, log_probs = self._forward_micro_batch(micro_batch, temperature=temperature)
             log_probs_lst.append(log_probs)
@@ -207,6 +211,7 @@ class DataParallelPPOActor(BasePPOActor):
 
         assert self.config.ppo_mini_batch_size % self.config.ppo_micro_batch_size == 0
         self.gradient_accumulation = self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size
+        
         temperature = data.meta_info['temperature']  # temperature must be in the data.meta_info to avoid slient error
 
         select_keys = ['responses', 'input_ids', 'attention_mask', 'position_ids', 'old_log_probs', 'advantages']
@@ -215,7 +220,8 @@ class DataParallelPPOActor(BasePPOActor):
         if self.config.use_kl_loss:
             select_keys.append('ref_log_prob')
         if self.config.use_kd_loss:
-            select_keys.extend(['teacher_prompts', 'teacher_responses', 'teacher_attention_masks'])
+            select_keys.extend(['judge_queries', 'judge_responses', 'judge_query_attention_masks'])
+        
         batch = data.select(batch_keys=select_keys).batch
 
         # Split to make minibatch iterator for updating the actor
@@ -233,10 +239,11 @@ class DataParallelPPOActor(BasePPOActor):
 
             self.actor_optimizer.zero_grad()
 
-            for data in micro_batches:
+            for micro_idx, data in enumerate(micro_batches):
                 data = data.cuda()  # actor device is cpu when using offload
                 responses = data['responses']
                 response_length = responses.size(1)
+                
                 attention_mask = data['attention_mask']
                 response_mask = attention_mask[:, -response_length:]
                 if self.config.state_masking:
@@ -255,6 +262,7 @@ class DataParallelPPOActor(BasePPOActor):
                                                                               advantages=advantages,
                                                                               eos_mask=response_mask,
                                                                               cliprange=clip_ratio)
+                
                 # compute entropy loss from entropy
                 entropy_loss = verl_F.masked_mean(entropy, response_mask)
 
@@ -272,75 +280,69 @@ class DataParallelPPOActor(BasePPOActor):
                     policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
                     metrics['actor/kl_loss'] = kl_loss.detach().item()
                     metrics['actor/kl_coef'] = self.config.kl_loss_coef
-
                 if self.config.use_kd_loss:
-                    # Compute knowledge distillation loss using supervised learning approach
-                    input_ids = data['judge_queries']  # This is now the query tokens
-                    labels = data['judge_responses']  # This is now the teacher response tokens
                     
-                    attention_mask = data['judge_query_attention_masks']
-                    valid_mask = attention_mask.sum(dim=1) > 0
+                    # Get input tensors and their shapes
+                    judge_input_ids = data['judge_queries']  # Shape: [batch_size, seq_len]
+                    judge_labels = data['judge_responses']  # Shape: [batch_size, seq_len]
+                    judge_attention_mask = data['judge_query_attention_masks']  # Shape: [batch_size, seq_len]
                     
-                    # If there are any valid samples, compute the loss only on those
-                    if valid_mask.any():
-                        # Filter to only valid samples
-                        valid_input_ids = input_ids[valid_mask]
-                        valid_labels = labels[valid_mask]
-                        valid_attention_mask = attention_mask[valid_mask]
+                    # Check for valid samples (where not all labels are -100)
+                    valid_rows = ~(judge_labels == -100).all(dim=1)
+                    
+                    total_rows = len(valid_rows)
+                    valid_count = valid_rows.sum().item()
+                    logger.debug(f"Found {valid_count} valid samples out of {total_rows} total rows")
+                    
+                    if not valid_rows.any():
+                        logger.debug("No valid samples found, setting KD loss to zero")
+                        kd_loss = torch.tensor(0.0, device=judge_labels.device)
+                    else:
+                        # Filter inputs to only include valid samples
+                        valid_judge_input_ids = judge_input_ids[valid_rows]
+                        valid_judge_attention_mask = judge_attention_mask[valid_rows]
+                        valid_judge_labels = judge_labels[valid_rows]
                         
-                        # Apply sequence parallelism for multi-GPU processing if enabled
                         if self.use_ulysses_sp:
-                            # Pad and slice inputs for sequence parallelism
-                            valid_input_ids_padded, _, pad_size = ulysses_pad_and_slice_inputs(
-                                valid_input_ids, 
+                            logger.debug("Using Ulysses SP for KD loss computation")
+                            # Pad and slice for sequence parallelism
+                            judge_input_ids_padded, _, pad_size = ulysses_pad_and_slice_inputs(
+                                valid_judge_input_ids, 
                                 None, 
                                 sp_size=self.ulysses_sequence_parallel_size
                             )
                             
-                            # Pad attention mask if needed
                             if pad_size > 0:
-                                valid_attention_mask = torch.nn.functional.pad(
-                                    valid_attention_mask, 
+                                valid_judge_attention_mask = torch.nn.functional.pad(
+                                    valid_judge_attention_mask, 
                                     (0, pad_size), 
                                     value=0
                                 )
                             
-                            # Compute loss with sequence parallelism
+                            # Forward pass with sequence parallelism
                             outputs = self.actor_module(
-                                input_ids=valid_input_ids_padded, 
-                                attention_mask=valid_attention_mask, 
-                                labels=valid_labels
+                                input_ids=judge_input_ids_padded, 
+                                attention_mask=valid_judge_attention_mask, 
+                                labels=valid_judge_labels
                             )
                             
-                            # Gather and unpad the loss
                             kd_loss = outputs.loss
                             
-                            # Scale the loss by the ratio of valid samples to total samples
-                            scale_factor = valid_mask.float().mean()
-                            kd_loss = kd_loss / scale_factor
                         else:
-                            # Compute loss without sequence parallelism
+                            logger.debug("Computing KD loss without sequence parallelism")
+                            # Forward pass without sequence parallelism
                             outputs = self.actor_module(
-                                input_ids=valid_input_ids, 
-                                attention_mask=valid_attention_mask, 
-                                labels=valid_labels
+                                input_ids=valid_judge_input_ids, 
+                                attention_mask=valid_judge_attention_mask, 
+                                labels=valid_judge_labels
                             )
                             kd_loss = outputs.loss
-                            
-                            # Scale the loss by the ratio of valid samples to total samples
-                            scale_factor = valid_mask.float().mean()
-                            kd_loss = kd_loss / scale_factor
-                    else:
-                        # If no valid samples, use a zero loss
-                        kd_loss = torch.tensor(0.0, device=input_ids.device, requires_grad=True)
                     
-
-                    print(f"KD Loss: {kd_loss.detach().item()}, Policy Loss before KD: {policy_loss.detach().item()}")
+                    logger.debug(f"KD Loss: {kd_loss.detach().item()}, Policy Loss before KD: {policy_loss.detach().item()}")
                     policy_loss = policy_loss + kd_loss * self.config.kd_loss_coef
-                    print(f"Policy Loss after KD: {policy_loss.detach().item()}")
+                    logger.debug(f"Policy Loss after KD: {policy_loss.detach().item()}")
                     metrics['actor/kd_loss'] = kd_loss.detach().item()
                     metrics['actor/kd_coef'] = self.config.kd_loss_coef
-
 
                 loss = policy_loss / self.gradient_accumulation
                 loss.backward()
@@ -356,5 +358,6 @@ class DataParallelPPOActor(BasePPOActor):
             grad_norm = self._optimizer_step()
             data = {'actor/grad_norm': grad_norm.detach().item()}
             append_to_dict(metrics, data)
+        
         self.actor_optimizer.zero_grad()
         return metrics

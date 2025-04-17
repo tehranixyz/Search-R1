@@ -24,14 +24,23 @@ from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 import re
 import numpy as np
 from search_r1.llm_agent.retrievers import Retrievers
+import logging
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 def _select_rm_score_fn(data_source):
+    logger.info(f"[main_ppo.py] Selecting reward model score function for data source: {data_source}")
     if data_source in ['nq', 'triviaqa', 'popqa', 'hotpotqa', '2wikimultihopqa', 'musique', 'bamboogle']:
         return qa_em.compute_score_em
     elif data_source in ['codejudge']:
         return codejudge_reward.compute_score
     else:
+        logger.error(f"[main_ppo.py] Reward scoring function not implemented for data source: '{data_source}'")
         raise NotImplementedError(f"Reward scoring function not implemented for data source: '{data_source}'. Supported sources are: nq, triviaqa, popqa, hotpotqa, 2wikimultihopqa, musique, bamboogle")
 
 
@@ -40,6 +49,7 @@ class RewardManager():
     """
 
     def __init__(self, tokenizer, num_examine, retriever_config_path, format_score=0., teacher_max_prompt_length=None, teacher_max_response_length=None) -> None:
+        logger.info(f"[main_ppo.py] Initializing RewardManager with num_examine={num_examine}, format_score={format_score}")
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.format_score = format_score
@@ -48,7 +58,7 @@ class RewardManager():
         self.teacher_max_response_length = teacher_max_response_length
         
         if self.teacher_max_prompt_length is None or self.teacher_max_response_length is None:
-            print("Warning: teacher_max_prompt_length or teacher_max_response_length not provided. Using default values.")
+            logger.warning("[main_ppo.py] teacher_max_prompt_length or teacher_max_response_length not provided. Using default values.")
             # Set reasonable defaults if not provided
             if self.teacher_max_prompt_length is None:
                 self.teacher_max_prompt_length = 512
@@ -57,9 +67,11 @@ class RewardManager():
 
     def __call__(self, data: DataProto):
         """We will expand this function gradually based on the available datasets"""
+        logger.info(f"[main_ppo.py] RewardManager.__call__ called with batch size: {len(data)}")
 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
         if 'rm_scores' in data.batch.keys():
+            logger.info("[main_ppo.py] Using pre-computed rm_scores from batch")
             return data.batch['rm_scores']
 
         reward_tensor = torch.zeros_like(data.batch['responses'], dtype=torch.float32)
@@ -67,8 +79,6 @@ class RewardManager():
         # Initialize lists to store judge queries and responses
         judge_queries = []
         judge_responses = []
-
-        # all_scores = []
 
         already_print_data_sources = {}
 
@@ -97,77 +107,38 @@ class RewardManager():
             compute_score_fn = _select_rm_score_fn(data_source)
 
             # Get score, judge_query, and judge_review from compute_score_fn
-            score, judge_query, judge_review = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth, format_score=self.format_score, retrievers=self.retrievers)
+            score, judge_query, judge_review = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth, retrievers=self.retrievers)
 
             reward_tensor[i, valid_response_length - 1] = score
             
             # Store judge query and response
             judge_queries.append(judge_query if judge_query is not None else "")
             judge_responses.append(judge_review if judge_review is not None else "")
-            
-            # all_scores.append(score)
 
-            if data_source not in already_print_data_sources:
-                already_print_data_sources[data_source] = 0
 
-            if already_print_data_sources[data_source] < self.num_examine:
-                already_print_data_sources[data_source] += 1
-                print(sequences_str)
-        
-        # print(f"[DEBUG] all_scores: {all_scores}")
-        # print(f"[DEBUG] all_scores shape: {np.array(all_scores).shape}")
-        # print(f"[DEBUG] all_scores mean: {np.mean(all_scores)}")
-        # print(f"[DEBUG] all_scores max: {np.max(all_scores)}")
-        # print(f"[DEBUG] all_scores min: {np.min(all_scores)}")
-        # print(f"[DEBUG] all_scores std: {np.std(all_scores)}")
+        max_length = self.teacher_max_prompt_length + self.teacher_max_response_length
+        full_texts = [p + a for p, a in zip(judge_queries, judge_responses)]
 
-        # Tokenize judge queries and responses
-        judge_query_tokens = []
-        judge_response_tokens = []
-        judge_query_attention_masks = []
-        judge_response_attention_masks = []
-        
-        for query, response in zip(judge_queries, judge_responses):
-            # Tokenize judge query with proper truncation and padding
-            query_encoding = self.tokenizer.encode(
-                query, 
-                add_special_tokens=True,
-                max_length=self.teacher_max_prompt_length,
-                truncation=True,
-                padding='max_length',
-                return_tensors='pt'
-            )
-            query_tokens = query_encoding
-            query_attention_mask = [1 if token != self.tokenizer.pad_token_id else 0 for token in query_tokens]
-            
-            # Tokenize judge response with proper truncation and padding
-            if response is None or response == "":
-                # For None or empty responses, create a dummy token and set attention mask to all zeros
-                # This will effectively ignore these examples during loss calculation
-                response_tokens = []
-                query_attention_mask = [0] * self.teacher_max_prompt_length
+        batch = self.tokenizer(full_texts, padding="max_length", truncation=True, max_length=max_length, return_tensors="pt")
+
+        input_ids = batch["input_ids"]
+        attention_mask = batch["attention_mask"]
+        labels = input_ids.clone()
+
+
+        for i, answer in enumerate(judge_responses):
+            if answer.strip() == "":
+                labels[i, :] = -100
             else:
-                response_encoding = self.tokenizer.encode(
-                    response, 
-                    add_special_tokens=True,
-                    max_length=self.teacher_max_response_length,
-                    truncation=True,
-                    padding='max_length',
-                    return_tensors='pt'
-                )
-                response_tokens = response_encoding
-                response_tokens = [label if label != self.tokenizer.pad_token_id else -100 for label in response_encoding]
-            
-            judge_query_tokens.append(query_tokens)
-            judge_query_attention_masks.append(query_attention_mask)
-            judge_response_tokens.append(response_tokens)
-        
-        # Add judge queries and responses to data
-        data.batch['judge_queries'] = judge_query_tokens
-        data.batch['judge_responses'] = judge_response_tokens
-        data.batch['judge_query_attention_masks'] = judge_query_attention_masks
+                prompt_ids = self.tokenizer(judge_queries[i], add_special_tokens=False)["input_ids"]
+                prompt_len = len(prompt_ids)
+                labels[i, :prompt_len] = -100  # Mask question/prompt tokens
 
-        return reward_tensor
+        labels[labels == self.tokenizer.pad_token_id] = -100
+
+            
+            
+        return reward_tensor, input_ids, labels, attention_mask
 
 
 import ray
@@ -176,34 +147,42 @@ import hydra
 
 @hydra.main(config_path='config', config_name='ppo_trainer', version_base=None)
 def main(config):
+    logger.info("[main_ppo.py] Starting main function")
     if not ray.is_initialized():
         # this is for local ray cluster
+        logger.info("[main_ppo.py] Initializing Ray cluster")
         ray.init(runtime_env={'env_vars': {'TOKENIZERS_PARALLELISM': 'true', 'NCCL_DEBUG': 'WARN'}})
 
+    logger.info("[main_ppo.py] Launching main_task")
     ray.get(main_task.remote(config))
+    logger.info("[main_ppo.py] Main function completed")
 
 
 @ray.remote
 def main_task(config):
+    logger.info("[main_ppo.py] Starting main_task")
     from verl.utils.fs import copy_local_path_from_hdfs
     from transformers import AutoTokenizer
 
     # print initial config
     from pprint import pprint
     from omegaconf import OmegaConf
+    logger.info("[main_ppo.py] Configuration:")
     pprint(OmegaConf.to_container(config, resolve=True))  # resolve=True will eval symbol values
     OmegaConf.resolve(config)
 
-    # env_class = ENV_CLASS_MAPPING[config.env.name]
-
     # download the checkpoint from hdfs
+    logger.info(f"[main_ppo.py] Downloading checkpoint from HDFS: {config.actor_rollout_ref.model.path}")
     local_path = copy_local_path_from_hdfs(config.actor_rollout_ref.model.path)
+    logger.info(f"[main_ppo.py] Checkpoint downloaded to: {local_path}")
 
     # instantiate tokenizer
+    logger.info("[main_ppo.py] Instantiating tokenizer")
     from verl.utils import hf_tokenizer
     tokenizer = hf_tokenizer(local_path)
 
     # define worker classes
+    logger.info(f"[main_ppo.py] Setting up worker classes with strategy: {config.actor_rollout_ref.actor.strategy}")
     if config.actor_rollout_ref.actor.strategy == 'fsdp':
         assert config.actor_rollout_ref.actor.strategy == config.critic.strategy
         from verl.workers.fsdp_workers import ActorRolloutRefWorker, CriticWorker
@@ -217,6 +196,7 @@ def main_task(config):
         ray_worker_group_cls = NVMegatronRayWorkerGroup
 
     else:
+        logger.error(f"[main_ppo.py] Unsupported strategy: {config.actor_rollout_ref.actor.strategy}")
         raise NotImplementedError
 
     from verl.trainer.ppo.ray_trainer import ResourcePoolManager, Role
@@ -244,15 +224,18 @@ def main_task(config):
     # - finally, we combine all the rewards together
     # - The reward type depends on the tag of the data
     if config.reward_model.enable:
+        logger.info(f"[main_ppo.py] Setting up reward model with strategy: {config.reward_model.strategy}")
         if config.reward_model.strategy == 'fsdp':
             from verl.workers.fsdp_workers import RewardModelWorker
         elif config.reward_model.strategy == 'megatron':
             from verl.workers.megatron_workers import RewardModelWorker
         else:
+            logger.error(f"[main_ppo.py] Unsupported reward model strategy: {config.reward_model.strategy}")
             raise NotImplementedError
         role_worker_mapping[Role.RewardModel] = ray.remote(RewardModelWorker)
         mapping[Role.RewardModel] = global_pool_id
 
+    logger.info("[main_ppo.py] Initializing reward functions")
     reward_fn = RewardManager(
         tokenizer=tokenizer, 
         num_examine=0,
@@ -270,7 +253,10 @@ def main_task(config):
         teacher_max_response_length=config.data.max_response_length
     )
 
+    logger.info("[main_ppo.py] Setting up resource pool manager")
     resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
+    
+    logger.info("[main_ppo.py] Initializing RayPPOTrainer")
     trainer = RayPPOTrainer(config=config,
                             tokenizer=tokenizer,
                             role_worker_mapping=role_worker_mapping,
@@ -279,9 +265,16 @@ def main_task(config):
                             reward_fn=reward_fn,
                             val_reward_fn=val_reward_fn,
                             )
+    
+    logger.info("[main_ppo.py] Initializing workers")
     trainer.init_workers()
+    
+    logger.info("[main_ppo.py] Starting training")
     trainer.fit()
+    logger.info("[main_ppo.py] Training completed")
 
 
 if __name__ == '__main__':
+    logger.info("[main_ppo.py] Script started")
     main()
+    logger.info("[main_ppo.py] Script completed")
