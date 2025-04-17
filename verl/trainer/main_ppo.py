@@ -132,7 +132,7 @@ class RewardManager():
             else:
                 prompt_ids = self.tokenizer(judge_queries[i], add_special_tokens=False)["input_ids"]
                 prompt_len = len(prompt_ids)
-                labels[i, :prompt_len] = -100  # Mask question/prompt tokens
+                labels[i, :prompt_len] = -100
 
         labels[labels == self.tokenizer.pad_token_id] = -100
 
