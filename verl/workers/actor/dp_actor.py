@@ -342,12 +342,13 @@ class DataParallelPPOActor(BasePPOActor):
                                 labels=valid_judge_labels
                             )
                             kd_loss = outputs.loss
-
-                                        # Log initial losses
-                    logger.debug(
-                        f"Initial losses:\n"
-                        f"  - Policy Loss: {policy_loss.detach().item():.4f}\n"
-                        f"  - KD Loss: {kd_loss.detach().item():.4f}"
+                    kd_loss = torch.clamp(kd_loss, -100.0, 100.0)
+                    policy_loss = torch.clamp(policy_loss, -100.0, 100.0)
+                    
+                    # Log initial losses
+                    logger.debug(f"\n"
+                        f"Initial losses - Policy Loss: {policy_loss.detach().item():.4f}\n"
+                        f"Initial losses - KD Loss: {kd_loss.detach().item():.4f}"
                     )
 
                     with torch.no_grad():
@@ -364,20 +365,21 @@ class DataParallelPPOActor(BasePPOActor):
                     normalized_policy_loss = policy_loss / (abs(safe_avg_policy) + eps)
                     normalized_kd_loss = kd_loss / (abs(safe_avg_kd) + eps)
 
+                    normalized_policy_loss = torch.clamp(normalized_policy_loss, -50.0, 50.0)
+                    normalized_kd_loss = torch.clamp(normalized_kd_loss, -50.0, 50.0)
+
+
                     # Combine using alpha
                     alpha = self.config.get('loss_blend_alpha', 0.8)  # or put in config file
                     policy_loss = alpha * normalized_policy_loss + (1 - alpha) * normalized_kd_loss
 
                     # Log normalized and final losses
-                    logger.debug(
-                        f"Loss transformation:\n"
-                        f"  After normalization:\n"
-                        f"    - Policy Loss: {normalized_policy_loss.detach().item():.4f}\n"
-                        f"    - KD Loss: {normalized_kd_loss.detach().item():.4f}\n"
-                        f"  Final combination (α={alpha:.2f}):\n"
-                        f"    - Policy contribution: {alpha * normalized_policy_loss.detach().item():.4f}\n"
-                        f"    - KD contribution: {(1-alpha) * normalized_kd_loss.detach().item():.4f}\n"
-                        f"    - Combined loss: {policy_loss.detach().item():.4f}"
+                    logger.debug(f"\n"
+                        f"After normalization - Policy Loss: {normalized_policy_loss.detach().item():.4f}\n"
+                        f"After normalization - KD Loss: {normalized_kd_loss.detach().item():.4f}\n"
+                        f"Final combination - Policy contribution: {alpha * normalized_policy_loss.detach().item():.4f}\n"
+                        f"Final combination - KD contribution: {(1-alpha) * normalized_kd_loss.detach().item():.4f}\n"
+                        f"Final combination - Combined loss: {policy_loss.detach().item():.4f}"
                     )
                     metrics['actor/kd_loss'] = kd_loss.detach().item()
                     metrics['actor/kd_coef'] = self.config.kd_loss_coef

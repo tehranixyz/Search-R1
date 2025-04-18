@@ -23,6 +23,7 @@ class GenerationConfig:
     search_url: str = None
     topk: int = 3
     retriever_config_path: str = None
+    test_mode: bool = False
 class LLMGenerationManager:
     def __init__(
         self,
@@ -35,7 +36,7 @@ class LLMGenerationManager:
         self.actor_rollout_wg = actor_rollout_wg
         self.config = config
         self.is_validation = is_validation
-        self.retrievers = Retrievers(config.retriever_config_path, test_mode=True)
+        self.retrievers = Retrievers(config.retriever_config_path, test_mode=config.test_mode)
 
         self.tensor_fn = TensorHelper(TensorConfig(
             pad_token_id=tokenizer.pad_token_id,

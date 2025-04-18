@@ -26,6 +26,10 @@ class Retrievers:
         """
         self.retrievers = {}
         self.test_mode = test_mode
+        if test_mode:
+            print("="*50)
+            print("Running Retrievers in TEST MODE - Using dummy responses")
+            print("="*50)
         
         # Check if the JSON file exists
         if not os.path.exists(json_path):
@@ -117,7 +121,10 @@ class Retrievers:
             
             return f"{random_score} and\nRationale: {selected_rationale}"
         
-        completion = retriever["client"].completions.create(model=retriever["model_name"], prompt=query)
+        try:
+            completion = retriever["client"].completions.create(model=retriever["model_name"], prompt=query)
+        except Exception as e:
+            raise Exception(f"Error creating completion with {retriever['model_name']}: {str(e)}")
         #print(f"Response from {retriever_name}:\n{completion}")
         return completion.choices[0].text
 
