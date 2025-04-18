@@ -43,15 +43,8 @@ from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seql
 import re
 from search_r1.llm_agent.generation import LLMGenerationManager, GenerationConfig
 
-# Configure logger
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-# Create console handler with formatting
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
+
 
 WorkerType = Type[Worker]
 
@@ -336,7 +329,7 @@ class RayPPOTrainer(object):
                  ray_worker_group_cls: RayWorkerGroup = RayWorkerGroup,
                  reward_fn=None,
                  val_reward_fn=None):
-
+        logger.setLevel(30)
         # assert torch.cuda.is_available(), 'cuda must be available on driver'
 
         self.tokenizer = tokenizer
@@ -393,17 +386,17 @@ class RayPPOTrainer(object):
                                          truncation='right')
         if self.config.data.train_data_num is not None:
             if self.config.data.train_data_num > len(self.train_dataset.dataframe):
-                print(f"[WARNING] training dataset size is smaller than desired size. Using the dataset as the original size {len(self.train_dataset.dataframe)}")
+                logger.info(f"[WARNING] training dataset size is smaller than desired size. Using the dataset as the original size {len(self.train_dataset.dataframe)}")
             else:
                 self.train_dataset.dataframe = self.train_dataset.dataframe.sample(self.config.data.train_data_num, random_state=42)
-        print(f"filtered training dataset size: {len(self.train_dataset.dataframe)}")
+        logger.info(f"filtered training dataset size: {len(self.train_dataset.dataframe)}")
 
         self.train_dataloader = DataLoader(dataset=self.train_dataset,
                                            batch_size=self.config.data.train_batch_size,
                                            shuffle=self.config.data.shuffle_train_dataloader,
                                            drop_last=True,
                                            collate_fn=collate_fn)
-        print(f'Train dataloader: {len(self.train_dataloader)} batches of size {self.config.data.train_batch_size}')
+        logger.info(f'Train dataloader: {len(self.train_dataloader)} batches of size {self.config.data.train_batch_size}')
 
         self.val_dataset = RLHFDataset(parquet_files=self.config.data.val_files,
                                        tokenizer=self.tokenizer,
@@ -414,10 +407,10 @@ class RayPPOTrainer(object):
                                        truncation='right')
         if self.config.data.val_data_num is not None:
             if self.config.data.val_data_num > len(self.val_dataset.dataframe):
-                print(f"[WARNING] validation dataset size is smaller than desired size. Using the dataset as the original size {len(self.val_dataset.dataframe)}")
+                logger.info(f"[WARNING] validation dataset size is smaller than desired size. Using the dataset as the original size {len(self.val_dataset.dataframe)}")
             else:
                 self.val_dataset.dataframe = self.val_dataset.dataframe.sample(self.config.data.val_data_num, random_state=42)
-        print(f"filtered validation dataset size: {len(self.val_dataset.dataframe)}")
+        logger.info(f"filtered validation dataset size: {len(self.val_dataset.dataframe)}")
 
         self.val_dataloader = DataLoader(dataset=self.val_dataset,
                                          batch_size=self.config.data.val_batch_size,
@@ -425,8 +418,8 @@ class RayPPOTrainer(object):
                                          drop_last=True,
                                          collate_fn=collate_fn)
 
-        print(f'Size of train dataloader: {len(self.train_dataloader)}')
-        print(f'Size of val dataloader: {len(self.val_dataloader)}')
+        logger.info(f'Size of train dataloader: {len(self.train_dataloader)}')
+        logger.info(f'Size of val dataloader: {len(self.val_dataloader)}')
         
         assert len(self.train_dataloader) >= 1
         assert len(self.val_dataloader) >= 1
@@ -438,7 +431,7 @@ class RayPPOTrainer(object):
             total_training_steps = self.config.trainer.total_training_steps
 
         self.total_training_steps = total_training_steps
-        print(f'Total training steps: {self.total_training_steps}')
+        logger.info(f'Total training steps: {self.total_training_steps}')
 
         OmegaConf.set_struct(self.config, True)
         with open_dict(self.config):
@@ -451,7 +444,7 @@ class RayPPOTrainer(object):
         Accumulates metrics across all batches before computing final statistics.
         """
         import torch
-        print("Starting validation in ray_trainer.py")
+        logger.info("Starting validation in ray_trainer.py")
         reward_tensor_lst = []
         data_source_lst = []
 
@@ -467,7 +460,7 @@ class RayPPOTrainer(object):
             topk = self.config.retriever.topk,
             retriever_config_path = self.config.retrievers.config_path,
         )
-        print("Generation config prepared for validation")
+        logger.info("Generation config prepared for validation")
 
         # Agent config preparation
         generation_manager = LLMGenerationManager(
@@ -476,17 +469,17 @@ class RayPPOTrainer(object):
             config=gen_config,
             is_validation = True,
         )
-        print("LLMGenerationManager initialized for validation")
+        logger.info("LLMGenerationManager initialized for validation")
 
         if not self.config.do_search:
-            print("Starting validation without search")
+            logger.info("Starting validation without search")
             for test_data in self.val_dataloader:
-                print("Processing validation batch")
+                logger.info("Processing validation batch")
                 test_batch = DataProto.from_single_dict(test_data)
 
                 # we only do validation on rule-based rm
                 if self.config.reward_model.enable and test_batch[0].non_tensor_batch['reward_model']['style'] == 'model':
-                    print("Skipping validation for model-based reward model")
+                    logger.info("Skipping validation for model-based reward model")
                     return {}
 
                 test_gen_batch = test_batch.pop(['input_ids', 'attention_mask', 'position_ids'])
@@ -497,31 +490,31 @@ class RayPPOTrainer(object):
                     'do_sample': False,
                     'validate': True,
                 }
-                print("Prepared test generation batch")
+                logger.info("Prepared test generation batch")
 
                 # pad to be divisible by dp_size
                 test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
-                print(f"Padded test batch with pad_size={pad_size}")
+                logger.info(f"Padded test batch with pad_size={pad_size}")
                 test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
                 # unpad
                 test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
-                print("Validation generation completed")
+                logger.info("Validation generation completed")
 
                 test_batch = test_batch.union(test_output_gen_batch)
                     
                 # evaluate using reward_function
                 # for certain reward function (e.g. sandbox), the generation can overlap with reward
                 reward_tensor, _, _, _= self.val_reward_fn(test_batch)
-                print("Computed reward tensor for validation batch")
+                logger.info("Computed reward tensor for validation batch")
 
                 reward_tensor_lst.append(reward_tensor)
                 data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
         else:
-            print("Starting validation with search")
+            logger.info("Starting validation with search")
             for batch_dict in self.val_dataloader:
                 timing_raw = {}
                 test_batch: DataProto = DataProto.from_single_dict(batch_dict)
-                print("Processing validation batch with search")
+                logger.info("Processing validation batch with search")
                 
                 test_gen_batch = test_batch.pop(batch_keys=['input_ids', 'attention_mask', 'position_ids'])
                 test_gen_batch.meta_info = {
@@ -531,7 +524,7 @@ class RayPPOTrainer(object):
                     'do_sample': False,
                     'validate': True,
                 }
-                print("Prepared test generation batch for search")
+                logger.info("Prepared test generation batch for search")
                 with _timer('step', timing_raw):
                     first_input_ids = test_gen_batch.batch['input_ids'][:, -gen_config.max_start_length:].clone()
                     with _timer('gen', timing_raw):
@@ -540,7 +533,7 @@ class RayPPOTrainer(object):
                             gen_batch=test_gen_batch,
                             initial_input_ids=first_input_ids,
                         )
-                        print("LLM loop completed for validation")
+                        logger.info("LLM loop completed for validation")
                     
                     test_batch = test_batch.union(final_gen_batch_output)
                     
@@ -550,7 +543,7 @@ class RayPPOTrainer(object):
                         # evaluate using reward_function
                         # for certain reward function (e.g. sandbox), the generation can overlap with reward
                         reward_tensor, _, _, _ = self.val_reward_fn(test_batch)
-                        print("Computed reward tensor for validation batch with knowledge distillation")
+                        logger.info("Computed reward tensor for validation batch with knowledge distillation")
 
                         reward_tensor_lst.append(reward_tensor)
                         data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
@@ -569,9 +562,9 @@ class RayPPOTrainer(object):
         metric_dict = {}
         for data_source, rewards in data_source_reward.items():
             metric_dict[f'val/test_score/{data_source}'] = np.mean(rewards)
-            print(f"Validation score for {data_source}: {np.mean(rewards)}")
+            logger.info(f"Validation score for {data_source}: {np.mean(rewards)}")
 
-        print("Validation completed")
+        logger.info("Validation completed")
         return metric_dict
 
 
@@ -649,12 +642,12 @@ class RayPPOTrainer(object):
         self.actor_rollout_wg.init_model()
 
     def _save_checkpoint(self):
-        print("Saving checkpoint")
+        logger.info("Saving checkpoint")
         actor_local_path = os.path.join(self.config.trainer.default_local_dir, 'actor',
                                         f'global_step_{self.global_steps}')
         actor_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(
             self.config.trainer.default_hdfs_dir, 'actor')
-        print(f"Saving actor checkpoint to {actor_local_path}")
+        logger.info(f"Saving actor checkpoint to {actor_local_path}")
         self.actor_rollout_wg.save_checkpoint(actor_local_path, actor_remote_path)
 
         if self.use_critic:
@@ -662,19 +655,19 @@ class RayPPOTrainer(object):
                                              f'global_step_{self.global_steps}')
             critic_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(
                 self.config.trainer.default_hdfs_dir, 'critic')
-            print(f"Saving critic checkpoint to {critic_local_path}")
+            logger.info(f"Saving critic checkpoint to {critic_local_path}")
             self.critic_wg.save_checkpoint(critic_local_path, critic_remote_path)
         
-        print("Checkpoint saved successfully")
+        logger.info("Checkpoint saved successfully")
 
     def _balance_batch(self, batch: DataProto, metrics, logging_prefix='global_seqlen'):
         """Reorder the data on single controller such that each dp rank gets similar total tokens"""
-        print("Balancing batch across data parallel ranks")
+        logger.info("Balancing batch across data parallel ranks")
         attention_mask = batch.batch['attention_mask']
         batch_size = attention_mask.shape[0]
         global_seqlen_lst = attention_mask.view(batch_size, -1).sum(-1).tolist()  # (train_batch_size,)
         world_size = self.actor_rollout_wg.world_size
-        print(f"Balancing {batch_size} examples across {world_size} data parallel ranks")
+        logger.info(f"Balancing {batch_size} examples across {world_size} data parallel ranks")
         global_partition_lst = get_seqlen_balanced_partitions(global_seqlen_lst,
                                                               k_partitions=world_size,
                                                               equal_size=True)
@@ -685,33 +678,32 @@ class RayPPOTrainer(object):
                                                     partitions=global_partition_lst,
                                                     prefix=logging_prefix)
         metrics.update(global_balance_stats)
-        print(f"Batch balanced: {global_balance_stats}")
+        logger.info(f"Batch balanced: {global_balance_stats}")
 
     def fit(self):
         """
         The training loop of PPO with knowledge distillation.
         """
-        logger = self.logger
         self.global_steps = 0
         
-        print("Starting PPO training with knowledge distillation in ray_trainer.py")
+        logger.info("Starting PPO training with knowledge distillation in ray_trainer.py")
         
         # Load teacher model (GPT-4)
         #teacher_model = self.config.knowledge_distillation.teacher_model
         
         # perform validation before training
         if self.val_reward_fn is not None and self.config.trainer.get('val_before_train', True):
-            print("Running initial validation before training")
+            logger.info("Running initial validation before training")
             val_metrics = self._validate()
-            print(f'Initial validation metrics: {val_metrics}')
-            logger.log(data=val_metrics, step=self.global_steps)
+            logger.info(f'Initial validation metrics: {val_metrics}')
+            self.logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get('val_only', False):
-                print("Validation only mode. Exiting training.")
+                logger.info("Validation only mode. Exiting training.")
                 return
 
         # we start from step 1
         self.global_steps += 1
-        print(f"Starting training from step {self.global_steps}")
+        logger.info(f"Starting training from step {self.global_steps}")
 
         # Agent config preparation
         gen_config = GenerationConfig(
@@ -727,45 +719,45 @@ class RayPPOTrainer(object):
             retriever_config_path = self.config.retrievers.config_path,
             test_mode = self.config.retrievers.test_mode
         )
-        print(f"Generation config prepared: max_turns={gen_config.max_turns}, max_response_length={gen_config.max_response_length}")
+        logger.info(f"Generation config prepared: max_turns={gen_config.max_turns}, max_response_length={gen_config.max_response_length}")
 
         generation_manager = LLMGenerationManager(
             tokenizer=self.tokenizer,
             actor_rollout_wg=self.actor_rollout_wg,
             config=gen_config,
         )
-        print("LLMGenerationManager initialized")
+        logger.info("LLMGenerationManager initialized")
 
         # start training loop
-        print(f"Starting training loop for {self.config.trainer.total_epochs} epochs")
+        logger.info(f"Starting training loop for {self.config.trainer.total_epochs} epochs")
         for epoch in range(self.config.trainer.total_epochs):
-            print(f"\n=== Starting Epoch {epoch+1}/{self.config.trainer.total_epochs} ===")
+            logger.info(f"\n=== Starting Epoch {epoch+1}/{self.config.trainer.total_epochs} ===")
             for batch_dict in self.train_dataloader:
-                print(f'Processing epoch {epoch+1}, step {self.global_steps}')
+                logger.info(f'Processing epoch {epoch+1}, step {self.global_steps}')
                 metrics = {}
                 timing_raw = {}
 
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
-                print(f"Batch size: {len(batch.batch['input_ids'])}")
+                logger.info(f"Batch size: {len(batch.batch['input_ids'])}")
                 
                 batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n_agent, interleave=True)
-                print(f"Batch size after repeat: {len(batch.batch['input_ids'])}")
+                logger.info(f"Batch size after repeat: {len(batch.batch['input_ids'])}")
 
                 # pop those keys for generation
                 gen_batch = batch.pop(batch_keys=['input_ids', 'attention_mask', 'position_ids'])
-                print("Prepared generation batch")
+                logger.info("Prepared generation batch")
 
                 with _timer('step', timing_raw):
                     if not self.config.do_search:
-                        print("Generating sequences without search")
+                        logger.info("Generating sequences without search")
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
                         batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
                                                                 dtype=object)
                         batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                         batch = batch.union(gen_batch_output)
-                        print(f"Generated {len(gen_batch_output.batch['responses'])} sequences")
+                        logger.info(f"Generated {len(gen_batch_output.batch['responses'])} sequences")
                     else:
-                        print("Generating sequences with search")
+                        logger.info("Generating sequences with search")
                         first_input_ids = gen_batch.batch['input_ids'][:, -gen_config.max_start_length:].clone().long()
                         with _timer('gen', timing_raw):
                             generation_manager.timing_raw = timing_raw
@@ -773,30 +765,30 @@ class RayPPOTrainer(object):
                                 gen_batch=gen_batch,
                                 initial_input_ids=first_input_ids,
                             )
-                            print(f"LLM loop completed, generated {len(final_gen_batch_output.batch['responses'])} sequences")
+                            logger.info(f"LLM loop completed, generated {len(final_gen_batch_output.batch['responses'])} sequences")
                         
                         for key in final_gen_batch_output.batch.keys():
                             final_gen_batch_output.batch[key] = final_gen_batch_output.batch[key].long()
                         
                         with torch.no_grad():
-                            print("Computing log probabilities")
+                            logger.info("Computing log probabilities")
                             output = self.actor_rollout_wg.compute_log_prob(final_gen_batch_output)
                             final_gen_batch_output = final_gen_batch_output.union(output)
                         
                         batch.non_tensor_batch['uid'] = batch.non_tensor_batch['index'].copy()
                         batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                         batch = batch.union(final_gen_batch_output)
-                        print(f"Final batch size after union: {len(batch.batch['responses'])}")
+                        logger.info(f"Final batch size after union: {len(batch.batch['responses'])}")
 
                     # balance the number of valid tokens on each dp rank
-                    print("Balancing batch across data parallel ranks")
+                    logger.info("Balancing batch across data parallel ranks")
                     self._balance_batch(batch, metrics=metrics)
 
                     # compute global_valid tokens
                     batch.meta_info['global_token_num'] = torch.sum(batch.batch['attention_mask'], dim=-1).tolist()
 
                     # batch.batch.apply(lambda x, key: x.long() if key != "old_log_probs" else x, inplace=True, key=True)
-                    print("Converting batch tensors to long type")
+                    logger.info("Converting batch tensors to long type")
                     for key in batch.batch.keys():
                         if key not in ['old_log_probs']:
                             batch.batch[key] = batch.batch[key].long()
@@ -804,27 +796,27 @@ class RayPPOTrainer(object):
                     if self.use_reference_policy:
                         # compute reference log_prob
                         with _timer('ref', timing_raw):
-                            print("Computing reference log probabilities")
+                            logger.info("Computing reference log probabilities")
                             ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
                             batch = batch.union(ref_log_prob)
 
                     # compute values
                     if self.use_critic:
                         with _timer('values', timing_raw):
-                            print("Computing values")
+                            logger.info("Computing values")
                             values = self.critic_wg.compute_values(batch)
                             batch = batch.union(values)
 
                     with _timer('adv', timing_raw):
-                        print("Computing advantages")
+                        logger.info("Computing advantages")
                         # compute scores
                         if self.use_rm:
-                            print("Computing reward model scores")
+                            logger.info("Computing reward model scores")
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
 
                         # combine with rule-based rm
-                        print("Computing rule-based reward scores")
+                        logger.info("Computing rule-based reward scores")
                         reward_tensor, judge_query, judge_response, judge_query_attention_masks = self.reward_fn(batch)
                         batch.batch['token_level_scores'] = reward_tensor
                         batch.batch['judge_queries'] = judge_query
@@ -834,95 +826,95 @@ class RayPPOTrainer(object):
                         # Log the number of examples that will be ignored in loss calculation
                         ignored_count = sum(1 for mask in batch.batch['judge_query_attention_masks'] if sum(mask) == 0)
                         if ignored_count > 0:
-                            print(f"Note: {ignored_count} examples will be ignored in knowledge distillation loss calculation due to missing judge responses")
+                            logger.info(f"Note: {ignored_count} examples will be ignored in knowledge distillation loss calculation due to missing judge responses")
 
                         # compute rewards with knowledge distillation
                         if not self.config.actor_rollout_ref.actor.use_kl_loss:
-                            print("Applying KL penalty")
+                            logger.info("Applying KL penalty")
                             batch, kl_metrics = apply_kl_penalty(batch,
                                                                  kl_ctrl=self.kl_ctrl,
                                                                  kl_penalty=self.config.algorithm.kl_penalty)
                             metrics.update(kl_metrics)
                         else:
-                            print("Using token level scores directly as rewards")
+                            logger.info("Using token level scores directly as rewards")
                             batch.batch['token_level_rewards'] = batch.batch['token_level_scores']
 
                         # compute advantages
-                        print(f"Computing advantages using {self.config.algorithm.adv_estimator}")
+                        logger.info(f"Computing advantages using {self.config.algorithm.adv_estimator}")
                         batch = compute_advantage(batch,
                                                   adv_estimator=self.config.algorithm.adv_estimator,
                                                   gamma=self.config.algorithm.gamma,
                                                   lam=self.config.algorithm.lam,
                                                   num_repeat=self.config.actor_rollout_ref.rollout.n)
-                        print("Advantage computation completed")
+                        logger.info("Advantage computation completed")
 
                     # update critic
                     if self.use_critic:
-                        print("Updating critic")
+                        logger.info("Updating critic")
                         with _timer('update_critic', timing_raw):
                             critic_output = self.critic_wg.update_critic(batch)
                         critic_output_metrics = reduce_metrics(critic_output.meta_info['metrics'])
                         metrics.update(critic_output_metrics)
-                        print("Critic update completed")
+                        logger.info("Critic update completed")
 
                     # implement critic warmup
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
-                        print("Updating actor")
+                        logger.info("Updating actor")
                         with _timer('update_actor', timing_raw):
                             if self.config.do_search and self.config.actor_rollout_ref.actor.state_masking:
                                 batch, metrics = self._create_loss_mask(batch, metrics)
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info['metrics'])
                         metrics.update(actor_output_metrics)
-                        print("Actor update completed")
+                        logger.info("Actor update completed")
                     else:
-                        print(f"Skipping actor update (critic warmup: {self.config.trainer.critic_warmup} > {self.global_steps})")
+                        logger.info(f"Skipping actor update (critic warmup: {self.config.trainer.critic_warmup} > {self.global_steps})")
 
                     # validate
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and \
                         self.global_steps % self.config.trainer.test_freq == 0:
-                        print(f"Running validation at step {self.global_steps}")
+                        logger.info(f"Running validation at step {self.global_steps}")
                         with _timer('testing', timing_raw):
                             val_metrics: dict = self._validate()
                         metrics.update(val_metrics)
-                        print(f"Validation completed with metrics: {val_metrics}")
+                        logger.info(f"Validation completed with metrics: {val_metrics}")
 
                     if self.config.trainer.save_freq > 0 and \
                             self.global_steps % self.config.trainer.save_freq == 0:
-                        print(f"Saving checkpoint at step {self.global_steps}")
+                        logger.info(f"Saving checkpoint at step {self.global_steps}")
                         with _timer('save_checkpoint', timing_raw):
                             self._save_checkpoint()
-                        print("Checkpoint saved")
+                        logger.info("Checkpoint saved")
 
                 # collect metrics
-                print("Computing data metrics")
+                logger.info("Computing data metrics")
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
-                print("Computing timing metrics")
+                logger.info("Computing timing metrics")
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
 
                 # TODO: make a canonical logger that supports various backend
-                print(f"Logging metrics for step {self.global_steps}")
-                logger.log(data=metrics, step=self.global_steps)
+                logger.info(f"Logging metrics for step {self.global_steps}")
+                self.logger.log(data=metrics, step=self.global_steps)
 
                 self.global_steps += 1
-                print(f"Completed step {self.global_steps-1}, moving to next step")
+                logger.info(f"Completed step {self.global_steps-1}, moving to next step")
 
                 if self.global_steps >= self.total_training_steps:
-                    print(f"Reached total training steps ({self.total_training_steps}), finishing training")
+                    logger.info(f"Reached total training steps ({self.total_training_steps}), finishing training")
 
                     # perform validation after training
                     if self.val_reward_fn is not None:
-                        print("Running final validation")
+                        logger.info("Running final validation")
                         val_metrics = self._validate()
                         pprint(f'Final validation metrics: {val_metrics}')
-                        logger.log(data=val_metrics, step=self.global_steps)
-                    print("Training completed successfully")
+                        self.logger.log(data=val_metrics, step=self.global_steps)
+                    logger.info("Training completed successfully")
                     return
     
     def _create_loss_mask(self, batch, metrics):
         """Create loss mask for state tokens."""
-        print("Creating loss mask for state tokens")
+        logger.info("Creating loss mask for state tokens")
         response_length = batch.batch['responses'].shape[-1]
         response_mask = batch.batch['attention_mask'][:, -response_length:]
         
@@ -934,9 +926,9 @@ class RayPPOTrainer(object):
             'state_tokens/coverage': (loss_mask.sum() / response_mask.sum()).item(),
         })
         
-        print(f"Loss mask created: total tokens={loss_mask.sum().item()}, coverage={metrics['state_tokens/coverage']}")
-        print("Batch shapes:")
+        logger.info(f"Loss mask created: total tokens={loss_mask.sum().item()}, coverage={metrics['state_tokens/coverage']}")
+        logger.info("Batch shapes:")
         for key, value in batch.batch.items():
             if isinstance(value, torch.Tensor):
-                print(f"{key}: {value.shape}")
+                logger.info(f"{key}: {value.shape}")
         return batch, metrics
