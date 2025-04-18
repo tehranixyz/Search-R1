@@ -1,8 +1,6 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import os
-import sys
 
-model_name = "Qwen/Qwen2.5-1.5B-Instruct"
+model_name = "Qwen/Qwen2.5-32B-Instruct-AWQ"
 save_path = model_name.split("/")[-1]
 model = AutoModelForCausalLM.from_pretrained(
     model_name

@@ -125,5 +125,5 @@ Qwen2-0.5B-Instruct
 gemma-2-2b-it
 downloader.py
 scripts/data_process/CPP-Python.jsonl
-data/codejudge/
 Qwen2.5-1.5B-Instruct
+Qwen2.5-14B-Instruct-AWQ
