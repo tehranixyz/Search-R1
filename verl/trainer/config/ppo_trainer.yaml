@@ -37,6 +37,10 @@ actor_rollout_ref:
     kl_loss_coef: 0.001 # for grpo
     kl_loss_type: low_var_kl # for grpo
     use_kd_loss: False # For knowledge distillation
+    loss_blend_alpha: 0.8 # blend ratio between policy loss and KD loss, 1 means only use policy loss
+    ema_alpha: 0.98 # smoothing factor for EMA to scale different losses
+    debug_level: 30 # 0 for no debug, 1 for debug
+    kd_loss_coef: 0.5
     ppo_epochs: 1
     shuffle: False
     ulysses_sequence_parallel_size: 1 # sp size
@@ -54,7 +58,6 @@ actor_rollout_ref:
       grad_offload: False
       optimizer_offload: False
       fsdp_size: -1
-    kd_loss_coef: 0.5
   ref:
     fsdp_config:
       param_offload: False
@@ -150,6 +153,7 @@ retriever:
 
 retrievers:
   config_path: "retrievers_config.json"
+  test_mode: false
 
 
 algorithm:
