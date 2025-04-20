@@ -84,5 +84,6 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.use_kd_loss=true \
     actor_rollout_ref.actor.loss_blend_alpha=0.8 \
     actor_rollout_ref.actor.debug_level=30 \
-    actor_rollout_ref.actor.ema_alpha=0.98 
+    actor_rollout_ref.actor.ema_alpha=0.98 \
+    actor_rollout_ref.actor.debug_level=10 
     2>&1 | tee $EXPERIMENT_NAME.log
