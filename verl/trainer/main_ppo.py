@@ -147,6 +147,7 @@ import hydra
 
 @hydra.main(config_path='config', config_name='ppo_trainer', version_base=None)
 def main(config):
+    logger.setLevel(config.actor_rollout_ref.actor.debug_level)
     logger.info("[main_ppo.py] Starting main function")
     if not ray.is_initialized():
         # this is for local ray cluster
