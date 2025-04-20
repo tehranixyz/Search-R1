@@ -63,6 +63,7 @@ class DataParallelPPOActor(BasePPOActor):
         self.running_avg_policy_loss = 1.0  # init with small non-zero values to avoid divide-by-zero
         self.running_avg_kd_loss = 1.0
         self.ema_alpha = 0.98  # Smoothing factor (tweak as needed)
+        logger.setLevel(self.config.debug_level)
 
     def _forward_micro_batch(self, micro_batch, temperature) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -346,7 +347,7 @@ class DataParallelPPOActor(BasePPOActor):
                     policy_loss = torch.clamp(policy_loss, -100.0, 100.0)
                     
                     # Log initial losses
-                    logger.debug(f"\n"
+                    logger.info(f"\n"
                         f"Initial losses - Policy Loss: {policy_loss.detach().item():.4f}\n"
                         f"Initial losses - KD Loss: {kd_loss.detach().item():.4f}"
                     )
@@ -374,7 +375,7 @@ class DataParallelPPOActor(BasePPOActor):
                     policy_loss = alpha * normalized_policy_loss + (1 - alpha) * normalized_kd_loss
 
                     # Log normalized and final losses
-                    logger.debug(f"\n"
+                    logger.info(f"\n"
                         f"After normalization - Policy Loss: {normalized_policy_loss.detach().item():.4f}\n"
                         f"After normalization - KD Loss: {normalized_kd_loss.detach().item():.4f}\n"
                         f"Final combination - Policy contribution: {alpha * normalized_policy_loss.detach().item():.4f}\n"

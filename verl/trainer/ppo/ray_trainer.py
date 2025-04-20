@@ -928,8 +928,4 @@ class RayPPOTrainer(object):
         })
         
         logger.info(f"Loss mask created: total tokens={loss_mask.sum().item()}, coverage={metrics['state_tokens/coverage']}")
-        logger.info("Batch shapes:")
-        for key, value in batch.batch.items():
-            if isinstance(value, torch.Tensor):
-                logger.info(f"{key}: {value.shape}")
         return batch, metrics
