@@ -347,7 +347,7 @@ class DataParallelPPOActor(BasePPOActor):
                     policy_loss = torch.clamp(policy_loss, -100.0, 100.0)
                     
                     # Log initial losses
-                    logger.info(f"\n"
+                    logger.debug(f"\n"
                         f"Initial losses - Policy Loss: {policy_loss.detach().item():.4f}\n"
                         f"Initial losses - KD Loss: {kd_loss.detach().item():.4f}"
                     )
@@ -375,7 +375,7 @@ class DataParallelPPOActor(BasePPOActor):
                     policy_loss = alpha * normalized_policy_loss + (1 - alpha) * normalized_kd_loss
 
                     # Log normalized and final losses
-                    logger.info(f"\n"
+                    logger.debug(f"\n"
                         f"After normalization - Policy Loss: {normalized_policy_loss.detach().item():.4f}\n"
                         f"After normalization - KD Loss: {normalized_kd_loss.detach().item():.4f}\n"
                         f"Final combination - Policy contribution: {alpha * normalized_policy_loss.detach().item():.4f}\n"
