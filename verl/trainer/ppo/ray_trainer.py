@@ -459,6 +459,7 @@ class RayPPOTrainer(object):
             search_url = self.config.retriever.url,
             topk = self.config.retriever.topk,
             retriever_config_path = self.config.retrievers.config_path,
+            test_mode = self.config.retrievers.test_mode
         )
         logger.info("Generation config prepared for validation")
 

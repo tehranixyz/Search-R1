@@ -37,7 +37,7 @@ from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_fir
 
 # Configure logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 __all__ = ['DataParallelPPOActor']
 

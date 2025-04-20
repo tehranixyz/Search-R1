@@ -197,12 +197,10 @@ def compute_score(solution_str, ground_truth, retrievers=None, score=1.0):
                 preference=preference,
                 retrievers=retrievers
             )
-    print("\n" + "="*50)
-    print("JUDGE QUERY")
-    print(f"{judge_query}\n")
-    print("JUDGE SCORE")
-    print(f"Score: {score}\n")
-    print("JUDGE REVIEW")
-    print(f"{judge_review}\n")
+    # print("\n" + "="*50)
+    # print("JUDGE SCORE")
+    # print(f"Score: {score}\n")
+    # print("JUDGE REVIEW")
+    # print(f"{judge_review}\n")
     
     return score, judge_query, judge_review
