@@ -29,6 +29,7 @@ def make_prefix(dp, template_type):
     source_code = dp['source_code']
     principle_content = dp['principle_content']
 
+
     # NOTE: also need to change reward_score/countdown.py
     if template_type == 'base':
         """This works for any base model"""
@@ -66,7 +67,7 @@ if __name__ == '__main__':
 
     data_source = 'codejudge'
 
-    dataset = datasets.load_dataset('json', data_files={'train': '/home/ali/Research/Search-R1/scripts/data_process/CPP-Python.jsonl'})
+    dataset = datasets.load_dataset('json', data_files={'train': '/home/pkpr/classes/rs/Search-R1/scripts/C++-Python.jsonl'})
     # Split dataset into train and test sets
     dataset = dataset['train'].select(range(10000)).train_test_split(test_size=0.1, seed=42)
 
@@ -81,6 +82,10 @@ if __name__ == '__main__':
             # if example['question'][-1] != '?':
             #     example['question'] += '?'
             question = make_prefix(example, template_type=args.template_type)
+            src_uid = example['src_uid']
+            source_lang = example['source_lang']
+            target_lang = example['target_lang']
+
             solution = {
                 "target": "",
             }
@@ -99,6 +104,9 @@ if __name__ == '__main__':
                 "extra_info": {
                     'split': split,
                     'index': idx,
+                    'src_uid': src_uid,
+                    'source_lang': source_lang,
+                    'target_lang': target_lang,
                 }
             }
             return data
@@ -114,6 +122,7 @@ if __name__ == '__main__':
     train_dataset.to_parquet(os.path.join(local_dir, 'train.parquet'))
     test_dataset.to_parquet(os.path.join(local_dir, 'test.parquet'))
 
+    
     if hdfs_dir is not None:
         makedirs(hdfs_dir)
 
