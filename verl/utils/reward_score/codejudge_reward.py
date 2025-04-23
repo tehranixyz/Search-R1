@@ -15,6 +15,9 @@
 import re
 import random
 from typing import Dict
+import search_r1.llm_agent.compiler_client as client
+
+compiler_url_hardcode = "http://localhost:5000/api/execute_code"
 
 def extract_prompt_info(prompt: str) -> Dict[str, str]:
     """
@@ -158,6 +161,30 @@ def extract_judge_score(judge_review: str) -> int:
         return int(match.group(0))
     return 0
 
+
+
+def compilation_score(language: str, source_code: str, compiler_url: str) -> int:
+    """
+    Dispatch to the right eval_* function based on `language`,
+    then return 1 if compile succeeds, 0 if there was a compilation error.
+    """
+    # Normalize for simple matching
+    lang = language.lower()
+
+    if "c++" in lang:
+        resp = client.eval_cpp(compiler_url, source_code)
+    elif "python" in lang:
+        resp = client.eval_python(compiler_url, source_code)
+    elif "java" in lang:
+        resp = client.eval_java(compiler_url, source_code)
+    else:
+        raise ValueError(f"Unsupported language: {language!r}")
+
+    # Use your helper to detect compile errors
+    return client.check_compile(resp)
+
+
+
 def compute_score(solution_str, ground_truth, retrievers=None, score=1.0):
     """The scoring function for code translation task.
     
@@ -188,6 +215,7 @@ def compute_score(solution_str, ground_truth, retrievers=None, score=1.0):
         trg_lang=prompt_info['target_language']
     )
     score = extract_judge_score(judge_review)
+    score += 5*compilation_score(prompt_info['target_language'], translation, compiler_url_hardcode)
 
     judge_query = create_assessment_query(
                 source_code=prompt_info['source_code'],
