@@ -20,6 +20,9 @@ from functools import partial
 from pathlib import Path
 from typing import List, Union, Dict, Any
 
+import os
+os.environ["WANDB_MODE"] = "offline"
+
 
 class Tracking(object):
     supported_backend = ['wandb', 'mlflow', 'console']
