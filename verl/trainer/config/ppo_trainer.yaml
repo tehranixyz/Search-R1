@@ -155,6 +155,7 @@ retriever:
 retrievers:
   config_path: "retrievers_config.json"
   test_mode: false
+  max_attempts: 1
 
 
 algorithm:

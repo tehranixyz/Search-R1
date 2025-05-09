@@ -12,13 +12,14 @@ class Retrievers:
     to interact with different LLM models for code-related queries.
     """
     
-    def __init__(self, json_path: str, test_mode: bool = False):
+    def __init__(self, json_path: str, test_mode: bool = False, max_attempts: int = 1):
         """
         Initialize the Retrievers class with configurations from a JSON file.
         
         Args:
             json_path (str): Path to the JSON configuration file containing retriever settings.
             test_mode (bool, optional): If True, returns dummy responses without calling OpenAI API. Defaults to False.
+            max_attempts (int, optional): Maximum number of attempts to get a completion. Defaults to 1.
             
         Raises:
             FileNotFoundError: If the specified JSON file does not exist.
@@ -26,6 +27,7 @@ class Retrievers:
         """
         self.retrievers = {}
         self.test_mode = test_mode
+        self.max_attempts = max_attempts
         if test_mode:
             print("="*50)
             print("Running Retrievers in TEST MODE - Using dummy responses")
@@ -68,7 +70,7 @@ class Retrievers:
             trg_lang (str): Target programming language.
             
         Returns:
-            str: The response from the LLM model.
+            str: The response from the LLM model or "Judge is not available." if all attempts fail.
         """
         retriever = self.retrievers[retriever_name]
         query = retriever["prompt_template"].format(src_lang=src_lang, trg_lang=trg_lang, source_code=source_code, translated_code=translated_code)
@@ -121,12 +123,19 @@ class Retrievers:
             
             return f"{random_score} and\nRationale: {selected_rationale}"
         
-        try:
-            completion = retriever["client"].completions.create(model=retriever["model_name"], prompt=query)
-        except Exception as e:
-            raise Exception(f"Error creating completion with {retriever['model_name']}: {str(e)}")
-        #print(f"Response from {retriever_name}:\n{completion}")
-        return completion.choices[0].text
+        last_error = None
+        for attempt in range(self.max_attempts):
+            try:
+                completion = retriever["client"].completions.create(model=retriever["model_name"], prompt=query)
+                return completion.choices[0].text
+            except Exception as e:
+                last_error = e
+                if attempt < self.max_attempts - 1:
+                    print(f"Attempt {attempt + 1} failed, retrying... Error: {str(e)}")
+                continue
+        
+        print(f"Failed to get judge response after {self.max_attempts} attempts. Last error: {str(last_error)}")
+        return "Judge is not available."
 
 
 

@@ -462,7 +462,8 @@ class RayPPOTrainer(object):
             search_url = self.config.retriever.url,
             topk = self.config.retriever.topk,
             retriever_config_path = self.config.retrievers.config_path,
-            test_mode = self.config.retrievers.test_mode
+            test_mode = self.config.retrievers.test_mode,
+            max_attempts = self.config.retrievers.max_attempts
         )
         logger.info("Generation config prepared for validation")
 
@@ -721,7 +722,8 @@ class RayPPOTrainer(object):
             search_url = self.config.retriever.url,
             topk = self.config.retriever.topk,
             retriever_config_path = self.config.retrievers.config_path,
-            test_mode = self.config.retrievers.test_mode
+            test_mode = self.config.retrievers.test_mode,
+            max_attempts = self.config.retrievers.max_attempts
         )
         logger.info(f"Generation config prepared: max_turns={gen_config.max_turns}, max_response_length={gen_config.max_response_length}")
 

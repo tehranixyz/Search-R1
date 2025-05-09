@@ -48,12 +48,12 @@ class RewardManager():
     """The reward manager.
     """
 
-    def __init__(self, tokenizer, num_examine, retriever_config_path, format_score=0., teacher_max_prompt_length=None, teacher_max_response_length=None, test_mode=False) -> None:
+    def __init__(self, tokenizer, num_examine, retriever_config_path, format_score=0., teacher_max_prompt_length=None, teacher_max_response_length=None, test_mode=False, max_attempts=1) -> None:
         logger.info(f"[main_ppo.py] Initializing RewardManager with num_examine={num_examine}, format_score={format_score}")
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.format_score = format_score
-        self.retrievers = Retrievers(json_path=retriever_config_path, test_mode=test_mode)
+        self.retrievers = Retrievers(json_path=retriever_config_path, test_mode=test_mode, max_attempts=max_attempts)
         self.teacher_max_prompt_length = teacher_max_prompt_length
         self.teacher_max_response_length = teacher_max_response_length
         
@@ -243,7 +243,8 @@ def main_task(config):
         retriever_config_path=config.retrievers.config_path,
         teacher_max_prompt_length=config.data.max_prompt_length,
         teacher_max_response_length=config.data.max_response_length,
-        test_mode=config.retrievers.test_mode
+        test_mode=config.retrievers.test_mode,
+        max_attempts=config.retrievers.max_attempts
     )
 
     # Note that we always use function-based RM for validation
@@ -253,7 +254,8 @@ def main_task(config):
         retriever_config_path=config.retrievers.config_path,
         teacher_max_prompt_length=config.data.max_prompt_length,
         teacher_max_response_length=config.data.max_response_length,
-        test_mode=config.retrievers.test_mode
+        test_mode=config.retrievers.test_mode,
+        max_attempts=config.retrievers.max_attempts
     )
 
     logger.info("[main_ppo.py] Setting up resource pool manager")

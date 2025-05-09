@@ -24,6 +24,7 @@ class GenerationConfig:
     topk: int = 3
     retriever_config_path: str = None
     test_mode: bool = False
+    max_attempts: int = 1
 class LLMGenerationManager:
     def __init__(
         self,
@@ -36,7 +37,7 @@ class LLMGenerationManager:
         self.actor_rollout_wg = actor_rollout_wg
         self.config = config
         self.is_validation = is_validation
-        self.retrievers = Retrievers(config.retriever_config_path, test_mode=config.test_mode)
+        self.retrievers = Retrievers(config.retriever_config_path, test_mode=config.test_mode, max_attempts=config.max_attempts)
 
         self.tensor_fn = TensorHelper(TensorConfig(
             pad_token_id=tokenizer.pad_token_id,
