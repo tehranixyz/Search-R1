@@ -21,7 +21,7 @@ from typing import Dict, Type
 import numpy as np
 import torch
 from torch import nn
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, MistralForSequenceClassification
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig# MistralForSequenceClassification
 from verl.models.registry import ModelRegistry
 
 
